@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ShieldOff } from "lucide-svelte";
+  import { ArrowRight, Barcode, FilePlus2, ShieldOff } from "lucide-svelte";
   import { getContext } from "svelte";
   import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
 
@@ -12,6 +12,7 @@
   let user = $derived(data.user);
   let canViewInvoices = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "invoices" && p.action === "read"));
   let canViewCustomers = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "customers" && p.action === "read"));
+  let canCreateInvoices = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "invoices" && p.action === "create"));
 
   function fmtMoney(n: number) {
     const cur = data.money?.currency || "USD";
@@ -27,8 +28,20 @@
   }
 </script>
 
-<div class="mb-4">
+<div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
   <h1 class="text-2xl font-semibold">{t("Dashboard")}</h1>
+  {#if canViewInvoices && canCreateInvoices}
+    <div class="flex flex-wrap gap-2">
+      <a href="/quick-sell" class="btn btn-primary btn-sm">
+        <Barcode size={16} />
+        {t("Quick Sell")}
+      </a>
+      <a href="/invoices/new" class="btn btn-outline btn-sm">
+        <FilePlus2 size={16} />
+        {t("Create Invoice")}
+      </a>
+    </div>
+  {/if}
 </div>
 
 {#if data.error}
@@ -83,14 +96,17 @@
         </div>
       </div>
     </div>
-    <div class="card bg-base-100 border-base-300 rounded-box border">
+    <a href="/invoices?status=outstanding" class="card bg-base-100 border-base-300 rounded-box border transition-shadow hover:shadow-md">
       <div class="card-body p-4">
-        <div class="text-xs opacity-70 sm:text-sm">{t("Open Invoices")}</div>
+        <div class="flex items-center justify-between text-xs opacity-70 sm:text-sm">
+          <span>{t("Open Invoices")}</span>
+          <ArrowRight size={15} />
+        </div>
         <div class="text-2xl font-extrabold sm:text-3xl">
           {(statusCounts.sent || 0) + (statusCounts.overdue || 0)}
         </div>
       </div>
-    </div>
+    </a>
     <div class="card bg-base-100 border-base-300 rounded-box border">
       <div class="card-body p-4">
         <div class="text-xs opacity-70 sm:text-sm">{t("Version")}</div>
@@ -110,14 +126,17 @@
         </div>
       </div>
     </div>
-    <div class="card bg-base-100 border-base-300 rounded-box border">
+    <a href="/invoices?status=outstanding" class="card bg-base-100 border-base-300 rounded-box border transition-shadow hover:shadow-md">
       <div class="card-body p-4">
-        <div class="text-xs opacity-70 sm:text-sm">{t("Outstanding")}</div>
+        <div class="flex items-center justify-between text-xs opacity-70 sm:text-sm">
+          <span>{t("Outstanding")}</span>
+          <ArrowRight size={15} />
+        </div>
         <div class="text-xl font-bold sm:text-2xl">
           {fmtMoney(data.money.outstanding)}
         </div>
       </div>
-    </div>
+    </a>
     <div class="card bg-base-100 border-base-300 rounded-box border">
       <div class="card-body p-4">
         <div class="text-xs opacity-70 sm:text-sm">{t("Paid")}</div>

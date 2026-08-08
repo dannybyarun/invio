@@ -7,6 +7,7 @@ import {
 import { getSetting } from "./settings.ts";
 import {
   CreateInvoiceRequest,
+  Customer,
   Invoice,
   InvoiceItem,
   InvoiceWithDetails,
@@ -91,6 +92,38 @@ function normalizeFonepayQrInput(
   }
 
   return { paymentMethod: method, fonepayQrType: type };
+}
+
+const WALK_IN_CUSTOMER_ID = "walk-in-customer";
+const WALK_IN_CUSTOMER_NAME = "Walk-in Customer";
+
+function ensureWalkInCustomer(): Customer {
+  const db = getDatabase();
+  const existing = getCustomerById(WALK_IN_CUSTOMER_ID);
+  if (existing) return existing;
+
+  const now = new Date();
+  const nextNumber = Number(
+    (db.query("SELECT COALESCE(MAX(customer_number), 0) FROM customers") as unknown[][])[0]?.[0] || 0,
+  ) + 1;
+  try {
+    db.query(
+      `INSERT INTO customers (id, name, created_at, customer_number) VALUES (?, ?, ?, ?)`,
+      [WALK_IN_CUSTOMER_ID, WALK_IN_CUSTOMER_NAME, now, nextNumber],
+    );
+  } catch {
+    // Older databases may not have customer_number yet.
+    db.query(
+      `INSERT INTO customers (id, name, created_at) VALUES (?, ?, ?)`,
+      [WALK_IN_CUSTOMER_ID, WALK_IN_CUSTOMER_NAME, now],
+    );
+  }
+  return {
+    id: WALK_IN_CUSTOMER_ID,
+    name: WALK_IN_CUSTOMER_NAME,
+    createdAt: now,
+    customerNumber: nextNumber,
+  };
 }
 
 function isInvoiceProtectionOverrideEnabled(): boolean {
@@ -276,6 +309,9 @@ export const createInvoice = (
   data: CreateInvoiceRequest,
 ): InvoiceWithDetails => {
   const db = getDatabase();
+  const customer = data.customerId ? getCustomerById(data.customerId) : ensureWalkInCustomer();
+  if (!customer) throw new Error("Customer not found");
+  const customerId = customer.id;
   const invoiceId = generateUUID();
   const shareToken = generateShareToken();
   // Prefer client-provided invoiceNumber when unique; otherwise auto-generate
@@ -302,18 +338,18 @@ export const createInvoice = (
       if (rows.length > 0) {
         const pattern = String((rows[0] as unknown[])[0] || "").trim();
         if (mustAllocateNumber || (pattern && /\{(C?SEQ|CNUM)\}/.test(pattern))) {
-          invoiceNumber = getNextInvoiceNumber(data.customerId);
+          invoiceNumber = getNextInvoiceNumber(customerId);
         } else {
           invoiceNumber = generateDraftInvoiceNumber();
         }
       } else {
         invoiceNumber = mustAllocateNumber
-          ? getNextInvoiceNumber(data.customerId)
+          ? getNextInvoiceNumber(customerId)
           : generateDraftInvoiceNumber();
       }
     } catch (_e) {
       invoiceNumber = mustAllocateNumber
-        ? getNextInvoiceNumber(data.customerId)
+        ? getNextInvoiceNumber(customerId)
         : generateDraftInvoiceNumber();
     }
   }
@@ -396,7 +432,7 @@ export const createInvoice = (
   const invoice: Invoice = {
     id: invoiceId,
     invoiceNumber: invoiceNumber!,
-    customerId: data.customerId,
+    customerId,
     issueDate,
     dueDate,
     currency,
@@ -588,12 +624,8 @@ export const createInvoice = (
     }
   }
 
-  // Get customer info for response
-  const customer = getCustomerById(data.customerId);
-  if (!customer) {
-    throw new Error("Customer not found");
-  }
-
+  // The customer is always present: normal invoices use the selected customer,
+  // while Quick Sell falls back to the stable Walk-in Customer record.
   return {
     ...invoice,
     customer,

@@ -9,6 +9,7 @@
   import ProductOptionsManager from "./components/ProductOptionsManager.svelte";
   import TemplateOptionsManager from "./components/TemplateOptionsManager.svelte";
   import BrandingManager from "./components/BrandingManager.svelte";
+  import { hasPermission } from "$lib/types";
 
   let { data } = $props();
   let t = getContext("i18n") as (key: string) => string;
@@ -54,7 +55,7 @@
   let demoMode = $derived((data as any)?.demoMode === true || (data as any)?.demoMode === "true");
   let requestedSection = $derived(page.url.searchParams.get("section") || "company");
   let section = $derived(requestedSection === "security" && demoMode ? "company" : requestedSection);
-  let canUpdateSettings = $derived(true); // TODO: user permissions
+  let canUpdateSettings = $derived(hasPermission(data.user, "settings", "update"));
 
   // Keep settings synced if data.settings changes from an external invalidation
   $effect(() => {
@@ -464,7 +465,15 @@
                 ><div class="label">
                   <span class="label-text">{t("Currency")}</span>
                 </div>
-                <input type="text" class="input input-bordered w-full" bind:value={settings.currency} oninput={(e) => (settings.currency = e.currentTarget.value.toUpperCase())} maxlength="3" placeholder="NPR" disabled={!canUpdateSettings} />
+                <input
+                  type="text"
+                  class="input input-bordered w-full"
+                  bind:value={settings.currency}
+                  oninput={(e) => (settings.currency = e.currentTarget.value.toUpperCase())}
+                  maxlength="3"
+                  placeholder="NPR"
+                  disabled={!canUpdateSettings}
+                />
               </label>
             </div>
             <label class="form-control"
@@ -512,7 +521,15 @@
                 ><div class="label">
                   <span class="label-text">{t("Country Code")}</span>
                 </div>
-                <input type="text" class="input input-bordered w-full" bind:value={settings.companyCountryCode} oninput={(e) => (settings.companyCountryCode = e.currentTarget.value.toUpperCase())} maxlength="2" placeholder="NP" disabled={!canUpdateSettings} />
+                <input
+                  type="text"
+                  class="input input-bordered w-full"
+                  bind:value={settings.companyCountryCode}
+                  oninput={(e) => (settings.companyCountryCode = e.currentTarget.value.toUpperCase())}
+                  maxlength="2"
+                  placeholder="NP"
+                  disabled={!canUpdateSettings}
+                />
               </label>
             </div>
           </div>
@@ -570,9 +587,9 @@
         {:else if section === "payments"}
           <div class="space-y-4">
             <h2 class="text-xl font-semibold">{t("Payments & Texts")}</h2>
-            <div class="rounded-box border border-info/30 bg-info/10 p-4">
+            <div class="rounded-box border-info/30 bg-info/10 border p-4">
               <div class="flex items-start gap-3">
-                <CreditCard size={20} class="mt-0.5 shrink-0 text-info" />
+                <CreditCard size={20} class="text-info mt-0.5 shrink-0" />
                 <div class="space-y-1">
                   <p class="font-medium">{t("Fonepay dashboard connection")}</p>
                   <p class="text-sm opacity-80">{t("Store the Fonepay login on the Invio backend. The password is encrypted and is never returned to your browser.")}</p>
@@ -591,10 +608,19 @@
               </label>
               <label class="form-control">
                 <div class="label"><span class="label-text">{t("Fonepay password")}</span></div>
-                <input type="password" class="input input-bordered w-full" bind:value={settings.fonepayPassword} autocomplete="new-password" placeholder={settings.fonepayConfigured ? t("Leave blank to keep current password") : "••••••••"} disabled={!canUpdateSettings} />
+                <input
+                  type="password"
+                  class="input input-bordered w-full"
+                  bind:value={settings.fonepayPassword}
+                  autocomplete="new-password"
+                  placeholder={settings.fonepayConfigured ? t("Leave blank to keep current password") : "••••••••"}
+                  disabled={!canUpdateSettings}
+                />
               </label>
             </div>
-            <p class="text-xs opacity-70">{t("The Fonepay dashboard uses these backend credentials when you open More → Fonepay Dashboard. It does not use browser local storage for the password.")}</p>
+            <p class="text-xs opacity-70">
+              {t("The Fonepay dashboard uses these backend credentials when you open More → Fonepay Dashboard. It does not use browser local storage for the password.")}
+            </p>
             <div class="alert alert-warning">
               <CircleAlert size={16} />
               <span>{t("Allowing edits/deletes for sent or paid invoices can violate invoice retention laws. Only enable this if you understand the legal impact.")}</span>

@@ -1,6 +1,26 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import { FileText, Edit, Copy, ExternalLink, Download, ArrowLeft, MoreHorizontal, FileCode2, ShieldOff, Send, Ban, Trash2, CheckCircle, Upload, Check, Pencil, ChevronDown, Mail, QrCode } from "lucide-svelte";
+  import {
+    FileText,
+    Edit,
+    Copy,
+    ExternalLink,
+    Download,
+    ArrowLeft,
+    MoreHorizontal,
+    FileCode2,
+    ShieldOff,
+    Send,
+    Ban,
+    Trash2,
+    CheckCircle,
+    Upload,
+    Check,
+    Pencil,
+    ChevronDown,
+    Mail,
+    QrCode,
+  } from "lucide-svelte";
   import { enhance } from "$app/forms";
   import { page } from "$app/state";
   import type { SubmitFunction } from "@sveltejs/kit";
@@ -10,6 +30,7 @@
   import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
 
   let { data, form } = $props();
+  let paymentRecoveryNotice = $derived(page.url.searchParams.get("payment") === "qr-failed");
   let t = getContext("i18n") as (key: string) => string;
   const getLoc = getContext("localization") as () => any;
 
@@ -42,18 +63,17 @@
   let generatingQr = $state(false);
   let paymentVerificationMessage = $state("");
   let qrImage = $derived(invoice?.fonepayQrType === "dynamic" ? invoice?.fonepayQrData : invoice?.fonepayQrType === "static" ? String(data.settings?.fonepayStaticQr || "/fonepay-static-qr.png") : "");
+  let canRetryQr = $derived(
+    Boolean(invoice && invoice.paymentMethod === "Fonepay" && invoice.fonepayQrType === "dynamic" && !invoice.fonepayQrData && invoice.status !== "paid" && invoice.status !== "complete" && canUpdate),
+  );
   let emailSending = $state(false);
   let emailDialog: HTMLDialogElement;
 
   let emailEnabled = $derived(Boolean(data.emailEnabled));
   let canExport = $derived(hasPermission(user, "invoices", "export"));
 
-  let defaultEmailSubject = $derived(
-    invoice ? `Invoice #${invoice.invoiceNumber || invoice.id}` : "Invoice",
-  );
-  let defaultEmailTo = $derived(
-    invoice?.customer?.email ?? "",
-  );
+  let defaultEmailSubject = $derived(invoice ? `Invoice #${invoice.invoiceNumber || invoice.id}` : "Invoice");
+  let defaultEmailTo = $derived(invoice?.customer?.email ?? "");
 
   $effect(() => {
     if ((form as any)?.emailSent) {
@@ -75,7 +95,7 @@
   });
 
   async function generateInvoiceQr() {
-    if (!invoice || invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic") return;
+    if (!canRetryQr) return;
     generatingQr = true;
     paymentVerificationMessage = "";
     try {
@@ -93,7 +113,9 @@
         body: JSON.stringify({ image, qrMessage: body.qrMessage }),
       });
       if (!saveResponse.ok) throw new Error(t("Unable to save the exact Fonepay QR"));
-      window.location.reload();
+      // Drop the recovery query after a successful retry so the warning does
+      // not reappear on the refreshed invoice page.
+      window.location.replace(window.location.pathname);
     } catch (err) {
       paymentVerificationMessage = err instanceof Error ? err.message : String(err);
     } finally {
@@ -113,9 +135,7 @@
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || t("Unable to verify Fonepay payment"));
-      paymentVerificationMessage = body.verified
-        ? t("Fonepay payment verified")
-        : String(body.reason || t("No matching Fonepay payment found yet"));
+      paymentVerificationMessage = body.verified ? t("Fonepay payment verified") : String(body.reason || t("No matching Fonepay payment found yet"));
       if (body.verified) window.location.reload();
     } catch (err) {
       paymentVerificationMessage = err instanceof Error ? err.message : String(err);
@@ -133,7 +153,9 @@
   }
 
   function fmtMoney(v?: number) {
-    const currency = String(invoice?.currency || data.settings?.currency || "USD").trim().toUpperCase();
+    const currency = String(invoice?.currency || data.settings?.currency || "USD")
+      .trim()
+      .toUpperCase();
     try {
       return new Intl.NumberFormat(numberFormatLocale(getLoc()?.locale, getLoc()?.numberFormat), {
         style: "currency",
@@ -176,98 +198,98 @@
 <dialog bind:this={emailDialog} class="modal">
   <div class="modal-box max-w-lg">
     <form method="dialog">
-      <button class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3">✕</button>
+      <button class="btn btn-sm btn-circle btn-ghost absolute top-3 right-3">✕</button>
     </form>
     <h3 class="mb-4 text-lg font-semibold">{t("Send via Email")}</h3>
 
-      {#if (form as any)?.emailError}
-        <div class="alert alert-error mb-4 text-sm">
-          <span>{(form as any).emailError}</span>
-        </div>
-      {/if}
+    {#if (form as any)?.emailError}
+      <div class="alert alert-error mb-4 text-sm">
+        <span>{(form as any).emailError}</span>
+      </div>
+    {/if}
 
-      <form
-        method="post"
-        use:enhance={() => {
-          emailSending = true;
-          return async ({ result, update }) => {
-            await update({ reset: false });
-            emailSending = false;
-            if (result.type === "success") emailDialog?.close();
-          };
-        }}
-      >
-        <input type="hidden" name="intent" value="send-email" />
+    <form
+      method="post"
+      use:enhance={() => {
+        emailSending = true;
+        return async ({ result, update }) => {
+          await update({ reset: false });
+          emailSending = false;
+          if (result.type === "success") emailDialog?.close();
+        };
+      }}
+    >
+      <input type="hidden" name="intent" value="send-email" />
 
-        <div class="form-control mb-3">
-          <label class="label pb-1" for="emailTo">
-            <span class="label-text font-medium">{t("To")}</span>
-            <span class="label-text-alt opacity-60">{t("Separate multiple with commas")}</span>
-          </label>
-          <input
-            id="emailTo"
-            type="text"
-            name="emailTo"
-            class="input input-bordered w-full"
-            value={defaultEmailTo}
-            placeholder="customer@example.com, other@example.com"
-            disabled={emailSending}
-            required
-          />
-        </div>
+      <div class="form-control mb-3">
+        <label class="label pb-1" for="emailTo">
+          <span class="label-text font-medium">{t("To")}</span>
+          <span class="label-text-alt opacity-60">{t("Separate multiple with commas")}</span>
+        </label>
+        <input
+          id="emailTo"
+          type="text"
+          name="emailTo"
+          class="input input-bordered w-full"
+          value={defaultEmailTo}
+          placeholder="customer@example.com, other@example.com"
+          disabled={emailSending}
+          required
+        />
+      </div>
 
-        <div class="form-control mb-3">
-          <label class="label pb-1" for="emailSubject">
-            <span class="label-text font-medium">{t("Subject")}</span>
-          </label>
-          <input
-            id="emailSubject"
-            type="text"
-            name="emailSubject"
-            class="input input-bordered w-full"
-            value={defaultEmailSubject}
-            disabled={emailSending}
-            required
-          />
-        </div>
+      <div class="form-control mb-3">
+        <label class="label pb-1" for="emailSubject">
+          <span class="label-text font-medium">{t("Subject")}</span>
+        </label>
+        <input id="emailSubject" type="text" name="emailSubject" class="input input-bordered w-full" value={defaultEmailSubject} disabled={emailSending} required />
+      </div>
 
-        <div class="form-control mb-4">
-          <label class="label pb-1" for="emailMessage">
-            <span class="label-text font-medium">{t("Message")}</span>
-            <span class="label-text-alt opacity-60">{t("Optional")}</span>
-          </label>
-          <textarea
-            id="emailMessage"
-            name="emailMessage"
-            class="textarea textarea-bordered w-full"
-            rows="4"
-            placeholder={t("Add a personal note...")}
-            disabled={emailSending}
-          ></textarea>
-        </div>
+      <div class="form-control mb-4">
+        <label class="label pb-1" for="emailMessage">
+          <span class="label-text font-medium">{t("Message")}</span>
+          <span class="label-text-alt opacity-60">{t("Optional")}</span>
+        </label>
+        <textarea id="emailMessage" name="emailMessage" class="textarea textarea-bordered w-full" rows="4" placeholder={t("Add a personal note...")} disabled={emailSending}></textarea>
+      </div>
 
-        <div class="text-base-content/60 mb-4 flex items-center gap-2 text-sm">
-          <FileText size={14} />
-          <span>{t("The invoice PDF will be attached automatically.")}</span>
-        </div>
+      <div class="text-base-content/60 mb-4 flex items-center gap-2 text-sm">
+        <FileText size={14} />
+        <span>{t("The invoice PDF will be attached automatically.")}</span>
+      </div>
 
-        <div class="modal-action mt-0">
-          <button type="button" class="btn btn-ghost" disabled={emailSending} onclick={() => emailDialog?.close()}>{t("Cancel")}</button>
-          <button type="submit" class="btn btn-primary" disabled={emailSending}>
-            {#if emailSending}
-              <span class="loading loading-spinner loading-sm"></span>
-            {:else}
-              <Mail size={16} />
-            {/if}
-            {t("Send")}
-          </button>
-        </div>
-      </form>
+      <div class="modal-action mt-0">
+        <button type="button" class="btn btn-ghost" disabled={emailSending} onclick={() => emailDialog?.close()}>{t("Cancel")}</button>
+        <button type="submit" class="btn btn-primary" disabled={emailSending}>
+          {#if emailSending}
+            <span class="loading loading-spinner loading-sm"></span>
+          {:else}
+            <Mail size={16} />
+          {/if}
+          {t("Send")}
+        </button>
+      </div>
+    </form>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 
 <div class="mb-6">
+  {#if paymentRecoveryNotice && invoice?.paymentMethod === "Fonepay" && invoice.status !== "paid" && invoice.status !== "complete"}
+    <div class="alert alert-warning mb-4 text-sm shadow sm:text-base">
+      <QrCode size={18} />
+      <div class="flex-1">
+        <div class="font-medium">{t("Invoice saved; Fonepay payment is still pending")}</div>
+        <div class="opacity-80">{t("You can retry the QR or use another payment method without recreating the invoice.")}</div>
+      </div>
+      {#if canRetryQr}
+        <button type="button" class="btn btn-sm" onclick={() => generateInvoiceQr()} disabled={generatingQr}>
+          {#if generatingQr}<span class="loading loading-spinner loading-xs"></span>{/if}{t("Retry QR")}
+        </button>
+      {/if}
+    </div>
+  {/if}
+
   {#if form?.error}
     <div class="alert alert-error mb-4 text-sm shadow sm:text-base">
       <div class="flex-1 overflow-hidden">
@@ -561,11 +583,11 @@
         <span class="font-medium">{invoice.paymentTerms || "-"}</span>
       </div>
       {#if invoice.paymentMethod === "Fonepay"}
-        <div class="rounded-box border border-primary/30 bg-primary/5 p-4">
+        <div class="rounded-box border-primary/30 bg-primary/5 border p-4">
           <div class="flex items-center gap-2 font-semibold"><QrCode size={18} /> Fonepay</div>
           {#if qrImage}<img src={qrImage} alt={t("Fonepay payment QR code")} class="mt-3 h-48 w-48 rounded-lg bg-white p-2" />{/if}
           <p class="mt-2 text-xs opacity-70">{invoice.fonepayQrType === "dynamic" ? t("Dynamic QR for this invoice total") : t("Static merchant QR")}</p>
-          {#if invoice.fonepayQrType === "dynamic" && !invoice.fonepayQrData}
+          {#if canRetryQr}
             <button type="button" class="btn btn-sm btn-outline mt-3" disabled={generatingQr} onclick={generateInvoiceQr}>
               {#if generatingQr}<span class="loading loading-spinner loading-xs"></span>{/if}{t("Generate payment QR")}
             </button>
@@ -576,7 +598,7 @@
             </button>
             {#if paymentVerificationMessage}<p class="mt-2 text-xs opacity-80">{paymentVerificationMessage}</p>{/if}
           {/if}
-          {#if invoice.fonepayVerifiedAt}<p class="mt-2 text-xs text-success">{t("Verified")}: {fmtDateTime(new Date(invoice.fonepayVerifiedAt))}</p>{/if}
+          {#if invoice.fonepayVerifiedAt}<p class="text-success mt-2 text-xs">{t("Verified")}: {fmtDateTime(new Date(invoice.fonepayVerifiedAt))}</p>{/if}
           {#if invoice.paymentTransactions?.[0]}
             <div class="mt-2 space-y-1 text-xs opacity-75">
               <p>{t("Transaction")}: {invoice.paymentTransactions[0].providerTransactionId}</p>

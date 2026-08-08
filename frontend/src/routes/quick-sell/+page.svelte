@@ -21,8 +21,12 @@
 
   let products = $derived((data.products || []) as Product[]);
   let taxDefinitions = $derived((data.taxDefinitions || []) as Array<{ id: string; percent: number }>);
-  let customers = $derived((data.customers || []) as Array<{ id: string; name: string }>);
-  let currency = $derived(String(data.settings?.currency || "NPR").trim().toUpperCase());
+  let customers = $derived(((data.customers || []) as Array<{ id: string; name: string }>).filter((customer) => customer.id !== "walk-in-customer"));
+  let currency = $derived(
+    String(data.settings?.currency || "NPR")
+      .trim()
+      .toUpperCase(),
+  );
   let numberFormat = $derived(data.localization?.numberFormat || "comma");
   let scannerInput = $state("");
   let searchInput = $state("");
@@ -74,9 +78,7 @@
   async function lookupCode(code: string) {
     const normalized = code.trim();
     if (!normalized) return;
-    const product = products.find(
-      (p) => p.barcode?.toLowerCase() === normalized.toLowerCase() || p.sku?.toLowerCase() === normalized.toLowerCase(),
-    );
+    const product = products.find((p) => p.barcode?.toLowerCase() === normalized.toLowerCase() || p.sku?.toLowerCase() === normalized.toLowerCase());
     if (!product) {
       try {
         const response = await fetch(`/api/v1/products/lookup?code=${encodeURIComponent(normalized)}`);
@@ -106,15 +108,24 @@
     products
       .filter((p) => {
         const q = searchInput.trim().toLowerCase();
-        return !q || [p.name, p.sku, p.barcode].some((v) => String(v || "").toLowerCase().includes(q));
+        return (
+          !q ||
+          [p.name, p.sku, p.barcode].some((v) =>
+            String(v || "")
+              .toLowerCase()
+              .includes(q),
+          )
+        );
       })
       .slice(0, 12),
   );
   let subtotal = $derived(cart.reduce((sum, item) => sum + price(item) * item.quantity, 0));
-  let taxTotal = $derived(cart.reduce((sum, item) => {
-    const tax = taxDefinitions.find((definition) => definition.id === item.taxDefinitionId);
-    return sum + (price(item) * item.quantity * (Number(tax?.percent) || 0) / 100);
-  }, 0));
+  let taxTotal = $derived(
+    cart.reduce((sum, item) => {
+      const tax = taxDefinitions.find((definition) => definition.id === item.taxDefinitionId);
+      return sum + (price(item) * item.quantity * (Number(tax?.percent) || 0)) / 100;
+    }, 0),
+  );
   let saleTotal = $derived(Math.round((subtotal + taxTotal) * 100) / 100);
   let fonepayStaticQr = $derived(String(data.settings?.fonepayStaticQr || "/fonepay-static-qr.png"));
 
@@ -170,14 +181,13 @@
       error = t("Add at least one product to the cart");
       return;
     }
-    if (!customerId) {
-      error = t("Select a customer before completing the sale");
-      return;
-    }
+    // Walk-in sales are valid and do not require a named customer. The backend
+    // creates/reuses the stable Walk-in Customer record when customerId is empty.
 
     selling = true;
     error = "";
     success = "";
+    let createdInvoiceId = "";
     try {
       // Dynamic QR previews are intentionally not persisted. The backend
       // allocates the final invoice reference first; the exact QR is generated
@@ -217,8 +227,9 @@
       // The backend allocates the final invoice number and computes the exact
       // total. Generate the dynamic QR only after those authoritative values
       // exist, then attach it to the pending invoice.
+      createdInvoiceId = String(body.id || "");
       if (paymentMethod === "Fonepay" && fonepayQrType === "dynamic") {
-        const qrResponse = await fetch(`/api/v1/invoices/${body.id}/fonepay-qr`, {
+        const qrResponse = await fetch(`/api/v1/invoices/${createdInvoiceId}/fonepay-qr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}",
@@ -226,7 +237,7 @@
         const qrBody = await qrResponse.json().catch(() => ({}));
         if (!qrResponse.ok || typeof qrBody.qrMessage !== "string") throw new Error(qrBody.error || t("Unable to generate Fonepay QR"));
         const exactQrData = await QRCode.toDataURL(qrBody.qrMessage, { width: 320, margin: 2 });
-        const updateResponse = await fetch(`/api/v1/invoices/${body.id}/fonepay-qr-image`, {
+        const updateResponse = await fetch(`/api/v1/invoices/${createdInvoiceId}/fonepay-qr-image`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image: exactQrData, qrMessage: qrBody.qrMessage }),
@@ -237,9 +248,16 @@
       cart = [];
       customerId = "";
       scanner?.focus();
-      setTimeout(() => goto(`/invoices/${body.id}`), 700);
+      setTimeout(() => goto(`/invoices/${createdInvoiceId}`), 700);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+      // Invoice creation is intentionally preserved if a downstream Fonepay
+      // QR call fails. Send the cashier to the invoice so they can retry or
+      // switch payment method instead of losing the sale.
+      const failedInvoiceId = typeof createdInvoiceId === "string" ? createdInvoiceId : "";
+      if (failedInvoiceId) {
+        await goto(`/invoices/${failedInvoiceId}?payment=qr-failed`);
+      }
     } finally {
       selling = false;
     }
@@ -248,16 +266,18 @@
   onMount(() => scanner?.focus());
 </script>
 
-<svelte:window onkeydown={(event) => {
-  if (event.key === "F2") {
-    event.preventDefault();
-    scanner?.focus();
-  }
-}} />
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === "F2") {
+      event.preventDefault();
+      scanner?.focus();
+    }
+  }}
+/>
 
 <div class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
   <div>
-    <div class="mb-1 text-sm font-semibold uppercase tracking-[0.18em] text-primary">{t("Point of sale")}</div>
+    <div class="text-primary mb-1 text-sm font-semibold tracking-[0.18em] uppercase">{t("Point of sale")}</div>
     <h1 class="text-3xl font-bold tracking-tight">{t("Quick Sell")}</h1>
     <p class="mt-1 text-sm opacity-70">{t("Scan a barcode or search by SKU to add products quickly.")}</p>
   </div>
@@ -271,28 +291,32 @@
   <section class="space-y-4">
     <div class="card bg-base-100 border-base-300 border shadow-sm">
       <div class="card-body p-4 sm:p-5">
-        <label class="input input-lg input-bordered flex w-full items-center gap-3 border-primary/50 shadow-sm" for="scanner-input">
+        <label class="input input-lg input-bordered border-primary/50 flex w-full items-center gap-3 shadow-sm" for="scanner-input">
           <Barcode size={22} class="text-primary" />
-          <input id="scanner-input" bind:this={scanner} bind:value={scannerInput} onkeydown={handleScannerKeydown} placeholder={t("Scan barcode or enter SKU") } autocomplete="off" />
+          <input id="scanner-input" bind:this={scanner} bind:value={scannerInput} onkeydown={handleScannerKeydown} placeholder={t("Scan barcode or enter SKU")} autocomplete="off" />
           <kbd class="kbd kbd-sm hidden sm:inline-flex">Enter</kbd>
         </label>
         <div class="divider my-2 text-xs opacity-50">{t("or choose a product")}</div>
         <label class="input input-bordered flex w-full items-center gap-2" for="product-search">
           <Search size={17} class="opacity-60" />
-          <input id="product-search" bind:value={searchInput} placeholder={t("Search products, SKU, or barcode") } />
+          <input id="product-search" bind:value={searchInput} placeholder={t("Search products, SKU, or barcode")} />
         </label>
       </div>
     </div>
 
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {#each visibleProducts as product (product.id)}
-        <button type="button" class="card bg-base-100 border-base-300 hover:border-primary hover:bg-primary/5 border text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md" onclick={() => addProduct(product)}>
+        <button
+          type="button"
+          class="card bg-base-100 border-base-300 hover:border-primary hover:bg-primary/5 border text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+          onclick={() => addProduct(product)}
+        >
           <div class="card-body gap-1 p-4">
             <div class="flex items-start justify-between gap-3">
-              <span class="font-semibold leading-tight">{product.name}</span>
-              <Plus size={18} class="shrink-0 text-primary" />
+              <span class="leading-tight font-semibold">{product.name}</span>
+              <Plus size={18} class="text-primary shrink-0" />
             </div>
-            <span class="text-lg font-bold text-primary">{fmtMoney(price(product))}</span>
+            <span class="text-primary text-lg font-bold">{fmtMoney(price(product))}</span>
             <span class="text-xs opacity-60">{product.barcode || product.sku || t("No barcode")}</span>
           </div>
         </button>
@@ -326,17 +350,23 @@
         {/each}
       </div>
 
-      <div class="space-y-3 border-t border-base-300 pt-4">
+      <div class="border-base-300 space-y-3 border-t pt-4">
         <label class="form-control">
           <span class="label-text mb-1 text-sm font-medium">{t("Customer")}</span>
           <select class="select select-bordered w-full" bind:value={customerId}>
-            <option value="">{t("Select customer")}</option>
+            <option value="">{t("Walk-in Customer")}</option>
             {#each customers as customer (customer.id)}<option value={customer.id}>{customer.name}</option>{/each}
           </select>
         </label>
         <label class="form-control">
           <span class="label-text mb-1 text-sm font-medium">{t("Payment method")}</span>
-          <select class="select select-bordered w-full" bind:value={paymentMethod} onchange={() => { qrDataUrl = ""; }}>
+          <select
+            class="select select-bordered w-full"
+            bind:value={paymentMethod}
+            onchange={() => {
+              qrDataUrl = "";
+            }}
+          >
             <option>Cash</option>
             <option>Card</option>
             <option>Bank transfer</option>
@@ -354,8 +384,12 @@
             </select>
           </label>
           {#if fonepayQrType}
-            <div class="rounded-box border border-primary/30 bg-primary/5 p-3">
-              {#if qrLoading}<span class="loading loading-spinner loading-sm"></span>{:else if qrDataUrl}<img src={qrDataUrl} alt={t("Fonepay payment QR code")} class="mx-auto h-44 w-44 rounded bg-white p-2" />{/if}
+            <div class="rounded-box border-primary/30 bg-primary/5 border p-3">
+              {#if qrLoading}<span class="loading loading-spinner loading-sm"></span>{:else if qrDataUrl}<img
+                  src={qrDataUrl}
+                  alt={t("Fonepay payment QR code")}
+                  class="mx-auto h-44 w-44 rounded bg-white p-2"
+                />{/if}
               {#if fonepayQrType === "dynamic"}<p class="mt-2 text-center text-xs opacity-70">{t("QR amount matches the current sale total.")}</p>{/if}
             </div>
           {/if}

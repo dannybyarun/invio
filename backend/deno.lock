@@ -10,6 +10,7 @@
     "npm:cssnano@^7.0.7": "7.1.1_postcss@8.5.6",
     "npm:daisyui@^5.0.54": "5.0.54",
     "npm:nepali-date-converter@3.4.0": "3.4.0",
+    "npm:nodemailer@*": "9.0.4",
     "npm:otpauth@^9.4.1": "9.5.1",
     "npm:pdf-lib@^1.17.1": "1.17.1",
     "npm:postcss@^8.5.3": "8.5.6",
@@ -530,6 +531,9 @@
     },
     "node-releases@2.0.19": {
       "integrity": "sha512-xxOWJsBKtzAq7DY0J+DTzuz58K8e7sJbdgwkbMWQe8UYB6ekmsQ45q0M/tJDsGaZmbC+l7n57UV8Hl5tHxO9uw=="
+    },
+    "nodemailer@9.0.4": {
+      "integrity": "sha512-LmJNRVRtfSCULxcZpy0Cpg4WWenlUZ9+zbmTO+S7v9wD6XreYLjXRFtDjtV/4F0HT5p1GyZfA0Ux/myxHb18CQ=="
     },
     "nth-check@2.1.1": {
       "integrity": "sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==",
