@@ -41,7 +41,10 @@ async function fetchBytes(url: URL): Promise<Uint8Array> {
 
 async function sha256Hex(source: Uint8Array | ArrayBuffer): Promise<string> {
   const buffer = source instanceof Uint8Array
-    ? source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength)
+    ? source.buffer.slice(
+      source.byteOffset,
+      source.byteOffset + source.byteLength,
+    )
     : source.slice(0);
   const hash = await crypto.subtle.digest("SHA-256", buffer as ArrayBuffer);
   return Array.from(new Uint8Array(hash)).map((b) =>
@@ -108,12 +111,13 @@ function sanitizeManifestPath(pathValue: string): string {
   }
   const unixified = trimmed.replaceAll("\\", "/");
   const normalized = normalize(unixified);
-  if (!normalized || normalized.startsWith("..") || normalized.includes("/../")) {
+  if (
+    !normalized || normalized.startsWith("..") || normalized.includes("/../")
+  ) {
     throw new Error("html.path must stay within the template directory");
   }
   return normalized;
 }
-
 
 export async function installTemplateFromManifest(manifestUrl: string) {
   const manifestUrlObj = await assertSafeRemoteUrl(manifestUrl, "manifest URL");
@@ -131,9 +135,15 @@ export async function installTemplateFromManifest(manifestUrl: string) {
   assertManifestShape(manifest);
 
   const manifestId = enforceSafeIdentifier(manifest.id, "manifest.id");
-  const manifestVersion = enforceSafeIdentifier(manifest.version, "manifest.version");
+  const manifestVersion = enforceSafeIdentifier(
+    manifest.version,
+    "manifest.version",
+  );
   const manifestPath = sanitizeManifestPath(String(manifest.html.path));
-  const htmlUrl = await assertSafeRemoteUrl(String(manifest.html.url), "manifest.html.url");
+  const htmlUrl = await assertSafeRemoteUrl(
+    String(manifest.html.url),
+    "manifest.html.url",
+  );
 
   const htmlBuf = await fetchBytes(htmlUrl);
   if (htmlBuf.byteLength > 128 * 1024) {
@@ -210,7 +220,10 @@ function loadBuiltinTemplate(): Template | null {
     return builtInDefaultTemplate;
   }
   try {
-    const url = new URL("../../static/templates/professional-modern.html", import.meta.url);
+    const url = new URL(
+      "../../static/templates/professional-modern.html",
+      import.meta.url,
+    );
     const html = Deno.readTextFileSync(url);
     builtInDefaultTemplate = {
       id: "builtin-professional-modern",
@@ -508,7 +521,7 @@ export async function installLocalTemplateFromZip(
   zipData: Uint8Array,
 ): Promise<Template> {
   // Create a blob from the zip data for the ZipReader
-  const blob = new Blob([zipData]);
+  const blob = new Blob([Uint8Array.from(zipData).buffer]);
   const zipReader = new ZipReader(blob.stream());
 
   try {

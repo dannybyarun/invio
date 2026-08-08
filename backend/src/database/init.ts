@@ -5,7 +5,7 @@ import { generateUUID } from "../utils/uuid.ts";
 import { RESOURCE_ACTIONS } from "../types/index.ts";
 import type { Action, Resource } from "../types/index.ts";
 
-let db: DB;
+let db: DB | undefined;
 
 //
 //  Path helpers
@@ -795,6 +795,7 @@ function getNumberingSettings(): {
   pattern?: string;
   enabled: boolean;
 } {
+  const database = getDatabase();
   const cfg = {
     prefix: "INV",
     includeYear: true,
@@ -803,7 +804,7 @@ function getNumberingSettings(): {
     enabled: true,
   };
   try {
-    const rows = db.query(
+    const rows = database.query(
       "SELECT key, value FROM settings WHERE key IN ('invoicePrefix','invoiceIncludeYear','invoiceNumberPadding','invoiceNumberPattern')",
     );
     const m = new Map<string, string>();
@@ -820,7 +821,7 @@ function getNumberingSettings(): {
     cfg.pattern = (m.get("invoiceNumberPattern") || "").trim() || undefined;
 
     try {
-      const raw = db.query(
+      const raw = database.query(
         "SELECT value FROM settings WHERE key = 'invoiceNumberingEnabled' LIMIT 1",
       );
       if (raw.length > 0) {
@@ -837,12 +838,13 @@ function getNumberingSettings(): {
 
 /** Find the highest existing sequential suffix matching `likePrefix%`, optionally scoped to a single customer. */
 function findMaxSequence(likePrefix: string, customerId?: string): number {
+  const database = getDatabase();
   const rows = customerId
-    ? db.query(
+    ? database.query(
       "SELECT invoice_number FROM invoices WHERE invoice_number LIKE ? AND customer_id = ?",
       [likePrefix + "%", customerId],
     )
-    : db.query(
+    : database.query(
       "SELECT invoice_number FROM invoices WHERE invoice_number LIKE ?",
       [likePrefix + "%"],
     );
@@ -860,7 +862,8 @@ function findMaxSequence(likePrefix: string, customerId?: string): number {
 function getCustomerNumber(customerId?: string): number | null {
   if (!customerId) return null;
   try {
-    const rows = db.query(
+    const database = getDatabase();
+    const rows = database.query(
       "SELECT customer_number FROM customers WHERE id = ?",
       [customerId],
     ) as unknown[][];

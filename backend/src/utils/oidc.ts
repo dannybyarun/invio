@@ -11,12 +11,15 @@ export interface OidcConfig {
 
 export function getOidcConfig(): OidcConfig {
   return {
-    enabled: (getEnv("OIDC_ENABLED", "false") || "false").toLowerCase() === "true",
+    enabled:
+      (getEnv("OIDC_ENABLED", "false") || "false").toLowerCase() === "true",
     issuerUrl: (getEnv("OIDC_ISSUER_URL", "") || "").replace(/\/$/, ""),
     clientId: getEnv("OIDC_CLIENT_ID", "") || "",
     clientSecret: getEnv("OIDC_CLIENT_SECRET", "") || "",
     redirectUri: getEnv("OIDC_REDIRECT_URI", "") || "",
-    autoProvision: (getEnv("OIDC_AUTO_PROVISION", "false") || "false").toLowerCase() === "true",
+    autoProvision:
+      (getEnv("OIDC_AUTO_PROVISION", "false") || "false").toLowerCase() ===
+        "true",
   };
 }
 
@@ -56,16 +59,23 @@ async function getDiscovery(): Promise<DiscoveryDocument> {
 
 // ── JWKS cache ─────────────────────────────────────────────────────────────
 
-let jwksCache: JsonWebKey[] | null = null;
+type CachedJwk = JsonWebKey & {
+  kid?: string;
+  use?: string;
+  alg?: string;
+  kty?: string;
+};
+
+let jwksCache: CachedJwk[] | null = null;
 let jwksCacheTime = 0;
 const JWKS_TTL_MS = 60 * 60 * 1000;
 
-async function getJwks(jwksUri: string): Promise<JsonWebKey[]> {
+async function getJwks(jwksUri: string): Promise<CachedJwk[]> {
   const now = Date.now();
   if (jwksCache && now - jwksCacheTime < JWKS_TTL_MS) return jwksCache;
   const resp = await fetch(jwksUri);
   if (!resp.ok) throw new Error(`JWKS fetch failed: ${resp.status}`);
-  const body = (await resp.json()) as { keys: JsonWebKey[] };
+  const body = (await resp.json()) as { keys: CachedJwk[] };
   jwksCache = body.keys;
   jwksCacheTime = now;
   return jwksCache;
@@ -99,7 +109,9 @@ function randomHex(bytes: number): string {
 export async function buildAuthorizationUrl(): Promise<string> {
   const config = getOidcConfig();
   if (!config.clientId) throw new Error("OIDC_CLIENT_ID is not configured");
-  if (!config.redirectUri) throw new Error("OIDC_REDIRECT_URI is not configured");
+  if (!config.redirectUri) {
+    throw new Error("OIDC_REDIRECT_URI is not configured");
+  }
 
   const discovery = await getDiscovery();
   const state = randomHex(16);
@@ -155,7 +167,13 @@ export async function exchangeAndVerify(
   const tokens = (await tokenResp.json()) as { id_token?: string };
   if (!tokens.id_token) throw new Error("No id_token in token response");
 
-  return verifyIdToken(tokens.id_token, discovery.jwks_uri, config.clientId, discovery.issuer, nonce);
+  return verifyIdToken(
+    tokens.id_token,
+    discovery.jwks_uri,
+    config.clientId,
+    discovery.issuer,
+    nonce,
+  );
 }
 
 // ── ID token verification (RS256) ─────────────────────────────────────────
@@ -194,15 +212,14 @@ async function verifyIdToken(
   const jwk = jwks.find(
     (k) =>
       k.kid === header.kid &&
-      (k as Record<string, unknown>).use !== "enc" &&
-      ((k as Record<string, unknown>).alg === "RS256" ||
-        (k as Record<string, unknown>).kty === "RSA"),
+      k.use !== "enc" &&
+      (k.alg === "RS256" || k.kty === "RSA"),
   );
   if (!jwk) throw new Error(`No matching JWK for kid=${header.kid}`);
 
   const cryptoKey = await crypto.subtle.importKey(
     "jwk",
-    jwk,
+    jwk as JsonWebKey,
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["verify"],
@@ -213,12 +230,15 @@ async function verifyIdToken(
   const valid = await crypto.subtle.verify(
     "RSASSA-PKCS1-v1_5",
     cryptoKey,
-    signature,
-    signedData,
+    signature.buffer as ArrayBuffer,
+    signedData.buffer as ArrayBuffer,
   );
   if (!valid) throw new Error("ID token signature verification failed");
 
-  const payload = JSON.parse(b64urlDecode(payloadB64)) as Record<string, unknown>;
+  const payload = JSON.parse(b64urlDecode(payloadB64)) as Record<
+    string,
+    unknown
+  >;
 
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.exp === "number" && payload.exp < now) {
@@ -228,8 +248,8 @@ async function verifyIdToken(
     throw new Error(`Issuer mismatch: got ${payload.iss}`);
   }
   const aud = payload.aud;
-  const audOk =
-    aud === clientId || (Array.isArray(aud) && aud.includes(clientId));
+  const audOk = aud === clientId ||
+    (Array.isArray(aud) && aud.includes(clientId));
   if (!audOk) throw new Error("ID token audience mismatch");
   if (payload.nonce !== expectedNonce) {
     throw new Error("ID token nonce mismatch");

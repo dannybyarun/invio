@@ -58,23 +58,30 @@ function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    binary += String.fromCharCode(
+      ...Array.from(bytes.subarray(offset, offset + chunkSize)),
+    );
   }
   return btoa(binary);
 }
 
 function getStaticFonepayQrDataUrl(): string | undefined {
   try {
-    const configured = getSetting("fonepayStaticQr");
-    if (configured && configured.startsWith("data:image/")) return configured;
-    if (configured && configured.startsWith("/api/v1/public/assets/logos/")) {
+    const configured = String(getSetting("fonepayStaticQr") || "");
+    if (configured.startsWith("data:image/")) return configured;
+    if (configured.startsWith("/api/v1/public/assets/logos/")) {
       const path = resolveLogoFsPathFromPublicPath(configured);
       if (path) {
         const bytes = Deno.readFileSync(path);
-        return `data:${contentTypeFromLogoPath(path)};base64,${bytesToBase64(bytes)}`;
+        return `data:${contentTypeFromLogoPath(path)};base64,${
+          bytesToBase64(bytes)
+        }`;
       }
     }
-    const assetUrl = new URL("../../static/fonepay-static-qr.png", import.meta.url);
+    const assetUrl = new URL(
+      "../../static/fonepay-static-qr.png",
+      import.meta.url,
+    );
     const bytes = Deno.readFileSync(assetUrl);
     return `data:image/png;base64,${bytesToBase64(bytes)}`;
   } catch {
@@ -87,9 +94,14 @@ function renderFonepayQrBlock(
   qrDataUrl?: string,
 ): string {
   if (!qrType) return "";
-  const image = qrDataUrl || (qrType === "static" ? getStaticFonepayQrDataUrl() : undefined);
-  if (!image || !/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(image)) return "";
-  const label = qrType === "dynamic" ? "Dynamic Fonepay payment QR" : "Fonepay payment QR";
+  const image = qrDataUrl ||
+    (qrType === "static" ? getStaticFonepayQrDataUrl() : undefined);
+  if (
+    !image || !/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(image)
+  ) return "";
+  const label = qrType === "dynamic"
+    ? "Dynamic Fonepay payment QR"
+    : "Fonepay payment QR";
   return `<section style="margin:24px 0;text-align:center;page-break-inside:avoid;">
     <h2 style="font-size:14px;margin:0 0 8px;color:#374151;">${label}</h2>
     <img src="${image}" alt="${label}" style="display:inline-block;width:180px;height:180px;object-fit:contain;background:#fff;padding:8px;border:1px solid #d1d5db;border-radius:8px;" />
