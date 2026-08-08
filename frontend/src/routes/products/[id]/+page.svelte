@@ -16,7 +16,7 @@
   let canDelete = $derived(hasPermission(user, "products", "delete"));
 
   function fmtMoney(cur: string | undefined, n: number) {
-    if (!cur) cur = "USD";
+    cur = String(data.settings?.currency || cur || "USD").trim().toUpperCase();
     try {
       return new Intl.NumberFormat(numberFormatLocale(data.localization?.locale, data.localization?.numberFormat), { style: "currency", currency: cur }).format(n || 0);
     } catch {
@@ -92,6 +92,10 @@
       <div>
         <div class="mb-1 text-sm opacity-70">{t("SKU")}</div>
         <div class="font-medium">{p.sku || "-"}</div>
+      </div>
+      <div>
+        <div class="mb-1 text-sm opacity-70">{t("Barcode")}</div>
+        <div class="font-medium">{p.barcode || "-"}</div>
       </div>
       <div>
         <div class="mb-1 text-sm opacity-70">{t("Unit")}</div>

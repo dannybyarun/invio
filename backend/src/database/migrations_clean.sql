@@ -1,4 +1,9 @@
 -- Drop existing tables to recreate with new schema
+DROP TABLE IF EXISTS invoice_status_history;
+DROP TABLE IF EXISTS invoice_item_taxes;
+DROP TABLE IF EXISTS invoice_taxes;
+DROP TABLE IF EXISTS fonepay_qr_payloads;
+DROP TABLE IF EXISTS payment_transactions;
 DROP TABLE IF EXISTS invoice_items;
 DROP TABLE IF EXISTS invoices;
 DROP TABLE IF EXISTS customers;
@@ -14,10 +19,17 @@ CREATE TABLE settings (
 
 -- Enhanced customers table
 CREATE TABLE customers (
--- No seed rows here; built-in templates are inserted during app startup.
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  contact_name TEXT,
   email TEXT,
+  phone TEXT,
   address TEXT,
+  city TEXT,
+  postal_code TEXT,
+  country_code TEXT,
   tax_id TEXT,
+  customer_number INTEGER,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -42,12 +54,43 @@ CREATE TABLE invoices (
   -- Payment and notes
   payment_terms TEXT,
   notes TEXT,
+  payment_method TEXT,
+  fonepay_qr_type TEXT,
+  fonepay_qr_data TEXT,
+  fonepay_bill_id TEXT,
+  fonepay_qr_amount NUMERIC,
+  fonepay_transaction_id TEXT,
+  fonepay_verified_at TEXT,
   
   -- System fields
   share_token TEXT UNIQUE NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  prices_include_tax BOOLEAN DEFAULT 0,
+  rounding_mode TEXT DEFAULT 'line'
 );
+
+CREATE TABLE fonepay_qr_payloads (
+  invoice_id TEXT PRIMARY KEY REFERENCES invoices(id) ON DELETE CASCADE,
+  qr_message TEXT NOT NULL,
+  amount NUMERIC NOT NULL,
+  bill_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE payment_transactions (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_transaction_id TEXT NOT NULL,
+  provider_reference TEXT,
+  amount NUMERIC NOT NULL,
+  verified_at TEXT NOT NULL,
+  UNIQUE(provider, provider_transaction_id),
+  UNIQUE(invoice_id, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_invoice ON payment_transactions(invoice_id, verified_at);
 
 -- Enhanced invoice items table
 CREATE TABLE invoice_items (
@@ -59,7 +102,40 @@ CREATE TABLE invoice_items (
   unit_price NUMERIC NOT NULL,
   line_total NUMERIC NOT NULL,
   notes TEXT,
-  sort_order INTEGER DEFAULT 0
+  sort_order INTEGER DEFAULT 0,
+  product_id TEXT REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS invoice_item_taxes (
+  id TEXT PRIMARY KEY,
+  invoice_item_id TEXT NOT NULL REFERENCES invoice_items(id) ON DELETE CASCADE,
+  tax_definition_id TEXT,
+  percent NUMERIC NOT NULL,
+  taxable_amount NUMERIC NOT NULL,
+  amount NUMERIC NOT NULL,
+  included BOOLEAN NOT NULL DEFAULT 0,
+  sequence INTEGER DEFAULT 0,
+  note TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS invoice_taxes (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  tax_definition_id TEXT,
+  percent NUMERIC NOT NULL,
+  taxable_amount NUMERIC NOT NULL,
+  tax_amount NUMERIC NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE invoice_status_history (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  changed_at TEXT NOT NULL,
+  payment_method TEXT,
+  note TEXT
 );
 
 -- Invoice attachments (optional)
@@ -79,6 +155,7 @@ CREATE TABLE templates (
   name TEXT NOT NULL,
   html TEXT NOT NULL,
   is_default BOOLEAN DEFAULT FALSE,
+  template_type TEXT DEFAULT 'builtin',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -108,7 +185,59 @@ CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
 CREATE INDEX IF NOT EXISTS idx_invoices_share_token ON invoices(share_token);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 
+-- Normalized tax schema
+CREATE TABLE IF NOT EXISTS tax_definitions (
+  id TEXT PRIMARY KEY,
+  code TEXT UNIQUE,
+  name TEXT,
+  percent NUMERIC NOT NULL,
+  category_code TEXT,
+  country_code TEXT,
+  vendor_specific_id TEXT,
+  default_included BOOLEAN DEFAULT 0,
+  metadata TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Multi-user system: users & permissions
+-- Products and lookup identifiers
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  unit_price NUMERIC NOT NULL DEFAULT 0,
+  sku TEXT,
+  barcode TEXT,
+  unit TEXT DEFAULT 'piece',
+  category TEXT,
+  tax_definition_id TEXT,
+  is_active BOOLEAN DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
+CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+
+CREATE TABLE IF NOT EXISTS product_categories (
+  id TEXT PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  is_builtin BOOLEAN DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_units (
+  id TEXT PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  is_builtin BOOLEAN DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,

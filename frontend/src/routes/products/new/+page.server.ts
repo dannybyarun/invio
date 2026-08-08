@@ -49,6 +49,7 @@ export const actions: Actions = {
     const description = String(form.get("description") || "");
     const unitPrice = parseFloat(String(form.get("unitPrice") || "0"));
     const sku = String(form.get("sku") || "");
+    const barcode = String(form.get("barcode") || "");
     const unit = String(form.get("unit") || "");
     const category = String(form.get("category") || "");
     const taxDefinitionId = String(form.get("taxDefinitionId") || "");
@@ -64,6 +65,7 @@ export const actions: Actions = {
         description: description || undefined,
         unitPrice,
         sku: sku || undefined,
+        barcode: barcode || undefined,
         unit: unit || undefined,
         category: category || undefined,
         taxDefinitionId: taxDefinitionId || undefined,

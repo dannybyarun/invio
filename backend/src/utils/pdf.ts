@@ -25,6 +25,7 @@ import {
 } from "../controllers/templates.ts";
 import { getDefaultTemplate } from "../controllers/templates.ts";
 import { getInvoiceLabels } from "../i18n/translations.ts";
+import { getSetting } from "../controllers/settings.ts";
 import * as NepaliDateModule from "nepali-date-converter";
 
 type NepaliDateInstance = {
@@ -51,6 +52,49 @@ function escapeHtml(value: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function getStaticFonepayQrDataUrl(): string | undefined {
+  try {
+    const configured = getSetting("fonepayStaticQr");
+    if (configured && configured.startsWith("data:image/")) return configured;
+    if (configured && configured.startsWith("/api/v1/public/assets/logos/")) {
+      const path = resolveLogoFsPathFromPublicPath(configured);
+      if (path) {
+        const bytes = Deno.readFileSync(path);
+        return `data:${contentTypeFromLogoPath(path)};base64,${bytesToBase64(bytes)}`;
+      }
+    }
+    const assetUrl = new URL("../../static/fonepay-static-qr.png", import.meta.url);
+    const bytes = Deno.readFileSync(assetUrl);
+    return `data:image/png;base64,${bytesToBase64(bytes)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderFonepayQrBlock(
+  qrType?: "static" | "dynamic",
+  qrDataUrl?: string,
+): string {
+  if (!qrType) return "";
+  const image = qrDataUrl || (qrType === "static" ? getStaticFonepayQrDataUrl() : undefined);
+  if (!image || !/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(image)) return "";
+  const label = qrType === "dynamic" ? "Dynamic Fonepay payment QR" : "Fonepay payment QR";
+  return `<section style="margin:24px 0;text-align:center;page-break-inside:avoid;">
+    <h2 style="font-size:14px;margin:0 0 8px;color:#374151;">${label}</h2>
+    <img src="${image}" alt="${label}" style="display:inline-block;width:180px;height:180px;object-fit:contain;background:#fff;padding:8px;border:1px solid #d1d5db;border-radius:8px;" />
+    <p style="font-size:11px;color:#6b7280;margin:8px 0 0;">Scan with a Fonepay-supported banking app</p>
+  </section>`;
 }
 
 function _escapeHtmlWithBreaks(value: unknown): string {
@@ -173,10 +217,13 @@ function formatDate(
     ? `${day}.${month}.${year}`
     : `${year}-${month}-${day}`;
 
-  if (!locale?.toLowerCase().startsWith("ne")) return gregorian;
+  const isNepali = locale?.toLowerCase().startsWith("ne") ?? false;
   try {
-    const bs = new NepaliDate(date).format("YYYY-MM-DD", "np");
-    return `${gregorian} (वि.सं. ${bs})`;
+    const bs = new NepaliDate(date).format(
+      "YYYY-MM-DD",
+      isNepali ? "np" : "en",
+    );
+    return `${gregorian} (${isNepali ? "वि.सं." : "BS"} ${bs})`;
   } catch {
     // Keep the Gregorian date if the converter's supported range is exceeded.
     return gregorian;
@@ -388,6 +435,8 @@ function buildContext(
     companyEmail: settings?.companyEmail || "",
     companyPhone: settings?.companyPhone || "",
     companyTaxId: settings?.companyTaxId || "",
+    companyCountryCode:
+      (settings?.companyCountryCode || "").trim().toUpperCase() || undefined,
 
     // Invoice
     invoiceNumber: invoice.invoiceNumber,
@@ -485,6 +534,12 @@ function buildContext(
     paymentTerms: invoice.paymentTerms || settings?.paymentTerms || undefined,
     paymentMethods: settings?.paymentMethods || undefined,
     bankAccount: settings?.bankAccount || undefined,
+    fonepayQrType: invoice.fonepayQrType,
+    fonepayQrDataUrl: invoice.fonepayQrType === "dynamic"
+      ? invoice.fonepayQrData
+      : invoice.fonepayQrType === "static"
+      ? getStaticFonepayQrDataUrl()
+      : undefined,
 
     // Notes
     notes: invoice.notes || settings?.defaultNotes || undefined,
@@ -599,11 +654,17 @@ export function buildInvoiceHTML(
     );
   }
 
-  return renderTpl(fallbackTemplate.html, {
+  const rendered = renderTpl(fallbackTemplate.html, {
     ...ctx,
     highlightColor: hl,
     highlightColorLight: hlLight,
   });
+  const qrBlock = renderFonepayQrBlock(ctx.fonepayQrType, ctx.fonepayQrDataUrl);
+  if (!qrBlock) return rendered;
+  if (/<\/body>/i.test(rendered)) {
+    return rendered.replace(/<\/body>/i, `${qrBlock}</body>`);
+  }
+  return `${rendered}${qrBlock}`;
 }
 
 async function resolveWeasyPrintExecutable(): Promise<string | null> {

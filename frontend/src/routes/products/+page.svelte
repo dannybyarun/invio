@@ -16,7 +16,7 @@
   }
 
   function fmtMoney(cur: string | undefined, n: number) {
-    if (!cur) cur = "USD";
+    cur = String(data.settings?.currency || cur || "USD").trim().toUpperCase();
     try {
       const locale = numberFormatLocale(data.localization?.locale, numberFormat);
       return new Intl.NumberFormat(locale, {
@@ -81,6 +81,7 @@
       <tr class="font-medium">
         <th>{t("Name")}</th>
         <th>{t("Description")}</th>
+        <th>{t("Barcode")}</th>
         <th class="w-24 pr-4 text-right">{t("Price")}</th>
       </tr>
     </thead>
@@ -91,12 +92,13 @@
             <a class="link" href={`/products/${p.id}`}>{p.name || p.id}</a>
           </td>
           <td class="max-w-[20rem] truncate opacity-70">{p.description || ""}</td>
+          <td class="text-sm opacity-70">{p.barcode || "-"}</td>
           <td class="pr-4 text-right font-medium">{fmtMoney(p.currency, getProductPrice(p))}</td>
         </tr>
       {/each}
       {#if products.length === 0}
         <tr>
-          <td colspan="3" class="py-10 text-center text-sm opacity-70">
+          <td colspan="4" class="py-10 text-center text-sm opacity-70">
             <span>
               {t("No products yet.")}
               <a href="/products/new" class="link">{t("Create your first product")}</a>.

@@ -13,12 +13,13 @@ const mapRowToProduct = (row: unknown[]): Product => ({
   description: (row[2] ?? undefined) as string | undefined,
   unitPrice: Number(row[3]) || 0,
   sku: (row[4] ?? undefined) as string | undefined,
-  unit: (row[5] ?? "piece") as string,
-  category: (row[6] ?? undefined) as string | undefined,
-  taxDefinitionId: (row[7] ?? undefined) as string | undefined,
-  isActive: Boolean(row[8]),
-  createdAt: new Date(row[9] as string),
-  updatedAt: new Date(row[10] as string),
+  barcode: (row[5] ?? undefined) as string | undefined,
+  unit: (row[6] ?? "piece") as string,
+  category: (row[7] ?? undefined) as string | undefined,
+  taxDefinitionId: (row[8] ?? undefined) as string | undefined,
+  isActive: Boolean(row[9]),
+  createdAt: new Date(row[10] as string),
+  updatedAt: new Date(row[11] as string),
 });
 
 const toNullable = (v?: string): string | null => {
@@ -27,19 +28,66 @@ const toNullable = (v?: string): string | null => {
   return s.length ? s : null;
 };
 
+function assertProductCodesAvailable(
+  db: ReturnType<typeof getDatabase>,
+  sku: string | null,
+  barcode: string | null,
+  excludeId?: string,
+): void {
+  const values = [sku, barcode].filter((value): value is string => !!value);
+  if (values.length === 0) return;
+
+  const placeholders = values.map(() => "?").join(", ");
+  const excluded = excludeId ? " AND id <> ?" : "";
+  const rows = db.query(
+    `SELECT sku, barcode FROM products
+     WHERE (sku COLLATE NOCASE IN (${placeholders})
+       OR barcode COLLATE NOCASE IN (${placeholders}))${excluded}`,
+    [...values, ...values, ...(excludeId ? [excludeId] : [])],
+  ) as unknown[][];
+
+  // The same code must not identify two products, regardless of whether it
+  // was stored as an SKU or barcode on the existing product.
+  if (rows.length > 0) {
+    throw new Error("SKU or barcode already exists on another product");
+  }
+}
+
 export const getProducts = (includeInactive = false): Product[] => {
   const db = getDatabase();
   const query = includeInactive
-    ? "SELECT id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products ORDER BY name ASC"
-    : "SELECT id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE is_active = 1 ORDER BY name ASC";
+    ? "SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products ORDER BY name ASC"
+    : "SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE is_active = 1 ORDER BY name ASC";
   const results = db.query(query) as unknown[][];
   return results.map((row: unknown[]) => mapRowToProduct(row));
+};
+
+export const getProductByCode = (code: string): Product | null => {
+  const normalized = String(code || "").trim();
+  if (!normalized) return null;
+  const db = getDatabase();
+  const select = (field: "barcode" | "sku") =>
+    db.query(
+      `SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at
+       FROM products WHERE is_active = 1 AND ${field} = ? COLLATE NOCASE`,
+      [normalized],
+    ) as unknown[][];
+
+  // Prefer an exact barcode match. Refuse duplicate identifiers instead of
+  // silently selling an arbitrary product with LIMIT 1.
+  const barcodes = select("barcode");
+  if (barcodes.length === 1) return mapRowToProduct(barcodes[0]);
+  if (barcodes.length > 1) return null;
+
+  const skus = select("sku");
+  if (skus.length !== 1) return null;
+  return mapRowToProduct(skus[0]);
 };
 
 export const getProductById = (id: string): Product | null => {
   const db = getDatabase();
   const results = db.query(
-    "SELECT id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE id = ?",
+    "SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE id = ?",
     [id],
   ) as unknown[][];
   if (results.length === 0) return null;
@@ -53,19 +101,23 @@ export const createProduct = (data: CreateProductRequest): Product => {
 
   const description = toNullable(data.description);
   const sku = toNullable(data.sku);
+  const barcode = toNullable(data.barcode);
   const unit = toNullable(data.unit) || "piece";
   const category = toNullable(data.category);
   const taxDefinitionId = toNullable(data.taxDefinitionId);
 
+  assertProductCodesAvailable(db, sku, barcode);
+
   db.query(
-    `INSERT INTO products (id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO products (id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     [
       productId,
       data.name,
       description,
       data.unitPrice || 0,
       sku,
+      barcode,
       unit,
       category,
       taxDefinitionId,
@@ -80,6 +132,7 @@ export const createProduct = (data: CreateProductRequest): Product => {
     description: description ?? undefined,
     unitPrice: data.unitPrice || 0,
     sku: sku ?? undefined,
+    barcode: barcode ?? undefined,
     unit: unit,
     category: category ?? undefined,
     taxDefinitionId: taxDefinitionId ?? undefined,
@@ -100,38 +153,42 @@ export const updateProduct = (
   const now = new Date();
 
   const name = data.name ?? existing.name;
-  const description =
-    data.description !== undefined
-      ? toNullable(data.description)
-      : existing.description ?? null;
-  const unitPrice =
-    data.unitPrice !== undefined ? data.unitPrice : existing.unitPrice;
-  const sku =
-    data.sku !== undefined ? toNullable(data.sku) : existing.sku ?? null;
-  const unit =
-    data.unit !== undefined
-      ? toNullable(data.unit) || "piece"
-      : existing.unit ?? "piece";
-  const category =
-    data.category !== undefined
-      ? toNullable(data.category)
-      : existing.category ?? null;
-  const taxDefinitionId =
-    data.taxDefinitionId !== undefined
-      ? toNullable(data.taxDefinitionId)
-      : existing.taxDefinitionId ?? null;
-  const isActive =
-    data.isActive !== undefined ? data.isActive : existing.isActive;
+  const description = data.description !== undefined
+    ? toNullable(data.description)
+    : existing.description ?? null;
+  const unitPrice = data.unitPrice !== undefined
+    ? data.unitPrice
+    : existing.unitPrice;
+  const sku = data.sku !== undefined
+    ? toNullable(data.sku)
+    : existing.sku ?? null;
+  const barcode = data.barcode !== undefined
+    ? toNullable(data.barcode)
+    : existing.barcode ?? null;
+  assertProductCodesAvailable(db, sku, barcode, id);
+  const unit = data.unit !== undefined
+    ? toNullable(data.unit) || "piece"
+    : existing.unit ?? "piece";
+  const category = data.category !== undefined
+    ? toNullable(data.category)
+    : existing.category ?? null;
+  const taxDefinitionId = data.taxDefinitionId !== undefined
+    ? toNullable(data.taxDefinitionId)
+    : existing.taxDefinitionId ?? null;
+  const isActive = data.isActive !== undefined
+    ? data.isActive
+    : existing.isActive;
 
   db.query(
     `UPDATE products SET
-      name = ?, description = ?, unit_price = ?, sku = ?, unit = ?, category = ?, tax_definition_id = ?, is_active = ?, updated_at = ?
+      name = ?, description = ?, unit_price = ?, sku = ?, barcode = ?, unit = ?, category = ?, tax_definition_id = ?, is_active = ?, updated_at = ?
      WHERE id = ?`,
     [
       name,
       description,
       unitPrice,
       sku,
+      barcode,
       unit,
       category,
       taxDefinitionId,

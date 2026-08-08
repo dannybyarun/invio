@@ -92,7 +92,17 @@ publicRoutes.get("/public/invoices/:share_token", async (c) => {
     return c.json({ message: "Invoice not found" }, 404);
   }
 
-  return c.json(invoice);
+  // Public share links must never expose raw dynamic QR payloads or internal
+  // reconciliation metadata. The HTML/PDF routes below still receive the full
+  // invoice internally so they can render the QR code when appropriate.
+  const {
+    fonepayQrData: _fonepayQrData,
+    fonepayTransactionId: _fonepayTransactionId,
+    fonepayVerifiedAt: _fonepayVerifiedAt,
+    paymentTransactions: _paymentTransactions,
+    ...publicInvoice
+  } = invoice;
+  return c.json(publicInvoice);
 });
 
 publicRoutes.get("/public/invoices/:share_token/pdf", async (c) => {
@@ -130,8 +140,8 @@ publicRoutes.get("/public/invoices/:share_token/pdf", async (c) => {
     companyAddress: settingsMap.companyAddress || "",
     companyCity: settingsMap.companyCity || "",
     companyPostalCode: settingsMap.companyPostalCode || "",
-    companyCountryCode: settingsMap.companyCountryCode ||
-      settingsMap.countryCode || "",
+    companyCountryCode: (settingsMap.companyCountryCode ||
+      settingsMap.countryCode || "").trim().toUpperCase(),
     postalCityFormat: settingsMap.postalCityFormat || "auto",
     companyEmail: settingsMap.companyEmail || "",
     companyPhone: settingsMap.companyPhone || "",
@@ -251,8 +261,8 @@ publicRoutes.get("/public/invoices/:share_token/html", async (c) => {
     companyAddress: settingsMap.companyAddress || "",
     companyCity: settingsMap.companyCity || "",
     companyPostalCode: settingsMap.companyPostalCode || "",
-    companyCountryCode: settingsMap.companyCountryCode ||
-      settingsMap.countryCode || "",
+    companyCountryCode: (settingsMap.companyCountryCode ||
+      settingsMap.countryCode || "").trim().toUpperCase(),
     postalCityFormat: settingsMap.postalCityFormat || "auto",
     companyEmail: settingsMap.companyEmail || "",
     companyPhone: settingsMap.companyPhone || "",

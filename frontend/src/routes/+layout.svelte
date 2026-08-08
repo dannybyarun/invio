@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import "@fontsource-variable/inter/wght.css";
-  import { LayoutDashboard, LogOut, Ellipsis, Package, ReceiptText, Settings, UserCog, Users } from "lucide-svelte";
+  import { Barcode, CreditCard, LayoutDashboard, LogOut, Ellipsis, Package, ReceiptText, Settings, UserCog, Users } from "lucide-svelte";
   import Breadcrumbs from "$lib/components/Breadcrumbs.svelte";
   import "./layout.css";
   import DemoAlert from "$lib/components/DemoAlert.svelte";
@@ -31,6 +31,7 @@
   let canViewProducts = $derived(hasPermission("products", "read"));
   let canViewCustomers = $derived(hasPermission("customers", "read"));
   let canViewSettings = $derived(hasPermission("settings", "read"));
+  let canViewFonepay = $derived(!!authUser?.isAdmin);
   let canViewUsers = $derived(hasPermission("users", "read"));
   let authed = $derived(!!authUser);
   let wide = $derived(page.data.wide ?? false);
@@ -94,6 +95,12 @@
                     {t("Invoices")}
                   </a>
                 </li>
+                <li>
+                  <a href="/quick-sell">
+                    <Barcode size={16} />
+                    {t("Quick Sell")}
+                  </a>
+                </li>
               {/if}
               {#if canViewCustomers}
                 <li>
@@ -123,6 +130,14 @@
                         <a href="/settings">
                           <Settings size={16} />
                           {t("Settings")}
+                        </a>
+                      </li>
+                    {/if}
+                    {#if canViewFonepay}
+                      <li>
+                        <a href="/fonepay">
+                          <CreditCard size={16} />
+                          {t("Fonepay")}
                         </a>
                       </li>
                     {/if}
@@ -166,6 +181,12 @@
                       {t("Invoices")}
                     </a>
                   </li>
+                  <li>
+                    <a href="/quick-sell">
+                      <Barcode size={16} />
+                      {t("Quick Sell")}
+                    </a>
+                  </li>
                 {/if}
                 {#if canViewProducts}
                   <li>
@@ -188,6 +209,14 @@
                     <a href="/settings">
                       <Settings size={16} />
                       {t("Settings")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewFonepay}
+                  <li>
+                    <a href="/fonepay">
+                      <CreditCard size={16} />
+                      {t("Fonepay")}
                     </a>
                   </li>
                 {/if}

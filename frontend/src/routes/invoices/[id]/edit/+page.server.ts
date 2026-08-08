@@ -33,6 +33,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
     return {
       invoice: invoiceRes.value,
+      settings,
       customers: customersRes.status === "fulfilled" ? customersRes.value : [],
       products: productsRes.status === "fulfilled" ? productsRes.value : [],
       taxDefinitions:

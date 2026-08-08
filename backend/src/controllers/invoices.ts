@@ -14,6 +14,13 @@ import {
   UpdateInvoiceRequest,
 } from "../types/index.ts";
 import { generateShareToken, generateUUID } from "../utils/uuid.ts";
+import {
+  fetchFonepayReport,
+  findMatchingFonepayTransaction,
+  fonepayTransactionAmount,
+  fonepayTransactionId,
+  fonepayTransactionReference,
+} from "../utils/fonepay.ts";
 
 type LineTaxInput = {
   percent: number;
@@ -51,6 +58,40 @@ type PerLineCalc = {
   // Summary grouped by percent
   summary: Array<{ percent: number; taxable: number; amount: number }>;
 };
+
+function normalizeFonepayQrInput(
+  paymentMethod?: unknown,
+  qrType?: unknown,
+  qrData?: unknown,
+): {
+  paymentMethod?: string;
+  fonepayQrType?: "static" | "dynamic";
+  fonepayQrData?: string;
+} {
+  const method = typeof paymentMethod === "string" ? paymentMethod.trim() : "";
+  if (method !== "Fonepay") {
+    return { paymentMethod: method || undefined };
+  }
+
+  const type = qrType === "static" || qrType === "dynamic" ? qrType : undefined;
+  if (!type) throw new Error("Select a Fonepay QR type");
+
+  const data = typeof qrData === "string" ? qrData.trim() : "";
+  if (type === "dynamic") {
+    // New Fonepay invoices may be created in pending state before the QR is
+    // generated from the server-calculated total and final invoice reference.
+    if (!data) return { paymentMethod: method, fonepayQrType: type };
+    if (!/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(data)) {
+      throw new Error("A valid dynamic Fonepay QR is required");
+    }
+    if (data.length > 1_000_000) {
+      throw new Error("Dynamic Fonepay QR is too large");
+    }
+    return { paymentMethod: method, fonepayQrType: type, fonepayQrData: data };
+  }
+
+  return { paymentMethod: method, fonepayQrType: type };
+}
 
 function isInvoiceProtectionOverrideEnabled(): boolean {
   const raw = getSetting("allowProtectedInvoiceChanges");
@@ -105,8 +146,8 @@ function calculatePerLineTotals(
     const gross = lineGrosses[i] || 0;
     const afterDiscount = Math.max(0, gross - (lineDiscounts[i] || 0));
     const taxes = items[i].taxes || [];
-    const rateSum =
-      taxes.reduce((s, t) => s + (Number(t.percent) || 0), 0) / 100;
+    const rateSum = taxes.reduce((s, t) => s + (Number(t.percent) || 0), 0) /
+      100;
 
     let net = afterDiscount;
     if (pricesIncludeTax && rateSum > 0) {
@@ -162,6 +203,9 @@ function calculatePerLineTotals(
     summary,
   };
 }
+
+const verificationAttemptCache = new Map<string, number>();
+const VERIFICATION_MIN_INTERVAL_MS = 30_000;
 
 function recordStatusChange(
   db: ReturnType<typeof getDatabase>,
@@ -246,6 +290,10 @@ export const createInvoice = (
       throw new Error("Invoice number already exists");
     }
   } else {
+    // Fonepay needs a stable reference before its QR is generated. Allocate a
+    // real invoice number on creation instead of showing a preview number.
+    // The unique invoice_number constraint remains the final concurrency guard.
+    const mustAllocateNumber = data.paymentMethod === "Fonepay";
     // If advanced numbering pattern with {SEQ}, {CSEQ}, or {CNUM} is active, allocate real number now; else draft placeholder
     try {
       const rows = db.query(
@@ -253,16 +301,20 @@ export const createInvoice = (
       );
       if (rows.length > 0) {
         const pattern = String((rows[0] as unknown[])[0] || "").trim();
-        if (pattern && /\{(C?SEQ|CNUM)\}/.test(pattern)) {
+        if (mustAllocateNumber || (pattern && /\{(C?SEQ|CNUM)\}/.test(pattern))) {
           invoiceNumber = getNextInvoiceNumber(data.customerId);
         } else {
           invoiceNumber = generateDraftInvoiceNumber();
         }
       } else {
-        invoiceNumber = generateDraftInvoiceNumber();
+        invoiceNumber = mustAllocateNumber
+          ? getNextInvoiceNumber(data.customerId)
+          : generateDraftInvoiceNumber();
       }
     } catch (_e) {
-      invoiceNumber = generateDraftInvoiceNumber();
+      invoiceNumber = mustAllocateNumber
+        ? getNextInvoiceNumber(data.customerId)
+        : generateDraftInvoiceNumber();
     }
   }
 
@@ -272,13 +324,12 @@ export const createInvoice = (
   // Determine tax behavior defaults
   const defaultPricesIncludeTax =
     String(settings.defaultPricesIncludeTax || "false").toLowerCase() ===
-    "true";
+      "true";
   const defaultRoundingMode = String(settings.defaultRoundingMode || "line");
   const defaultTaxRate = Number(settings.defaultTaxRate || 0) || 0;
 
   // Determine if per-line taxes are used
-  const hasPerLineTaxes =
-    Array.isArray(data.items) &&
+  const hasPerLineTaxes = Array.isArray(data.items) &&
     data.items.some(
       (i) =>
         Array.isArray((i as { taxes?: LineTaxInput[] }).taxes) &&
@@ -319,8 +370,25 @@ export const createInvoice = (
 
   // Get default settings for currency and payment terms
   const currency = data.currency || settings.currency || "USD";
-  const paymentTerms =
-    data.paymentTerms || settings.paymentTerms || "Due in 30 days";
+  const paymentTerms = data.paymentTerms || settings.paymentTerms ||
+    "Due in 30 days";
+  const fonepay = normalizeFonepayQrInput(
+    data.paymentMethod,
+    data.fonepayQrType,
+    data.fonepayQrData,
+  );
+  const fonepayBillId = fonepay.paymentMethod === "Fonepay"
+    ? String(data.fonepayBillId || invoiceNumber || invoiceId).trim()
+    : undefined;
+  const fonepayQrAmount = fonepay.paymentMethod === "Fonepay"
+    ? totals.total
+    : undefined;
+  // A QR being generated is not proof of payment. Fonepay invoices start as
+  // sent/pending and can become paid only after report reconciliation.
+  const invoiceStatus: Invoice["status"] = fonepay.paymentMethod === "Fonepay" &&
+      (data.status === "paid" || data.status === "draft")
+    ? "sent"
+    : (data.status || "draft") as Invoice["status"];
 
   const pricesIncludeTax = data.pricesIncludeTax ?? defaultPricesIncludeTax;
   const roundingMode = data.roundingMode || defaultRoundingMode;
@@ -332,7 +400,7 @@ export const createInvoice = (
     issueDate,
     dueDate,
     currency,
-    status: data.status || "draft",
+    status: invoiceStatus,
 
     // Totals
     subtotal: totals.subtotal,
@@ -348,6 +416,11 @@ export const createInvoice = (
     // Payment and notes
     paymentTerms,
     notes: data.notes,
+    paymentMethod: fonepay.paymentMethod,
+    fonepayQrType: fonepay.fonepayQrType,
+    fonepayQrData: fonepay.fonepayQrData,
+    fonepayBillId,
+    fonepayQrAmount,
 
     // System fields
     shareToken,
@@ -360,9 +433,10 @@ export const createInvoice = (
     `INSERT INTO invoices (
       id, invoice_number, customer_id, issue_date, due_date, currency, status,
       subtotal, discount_amount, discount_percentage, tax_rate, tax_amount, total,
-      payment_terms, notes, share_token, created_at, updated_at,
-      prices_include_tax, rounding_mode
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      payment_terms, notes, payment_method, fonepay_qr_type, fonepay_qr_data,
+      fonepay_bill_id, fonepay_qr_amount, fonepay_transaction_id, fonepay_verified_at,
+      share_token, created_at, updated_at, prices_include_tax, rounding_mode
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       invoice.id,
       invoice.invoiceNumber,
@@ -379,6 +453,13 @@ export const createInvoice = (
       invoice.total,
       invoice.paymentTerms,
       invoice.notes,
+      invoice.paymentMethod,
+      invoice.fonepayQrType,
+      invoice.fonepayQrData,
+      invoice.fonepayBillId,
+      invoice.fonepayQrAmount,
+      null,
+      null,
       invoice.shareToken,
       invoice.createdAt,
       invoice.updatedAt,
@@ -386,7 +467,12 @@ export const createInvoice = (
       roundingMode,
     ],
   );
-  recordStatusChange(db, invoiceId, invoice.status || "draft");
+  recordStatusChange(
+    db,
+    invoiceId,
+    invoice.status || "draft",
+    fonepay.paymentMethod,
+  );
 
   // Insert invoice items
   const items: InvoiceItem[] = [];
@@ -475,17 +561,16 @@ export const createInvoice = (
   } else {
     const rawTaxDefId = (data as { taxDefinitionId?: string | null })
       .taxDefinitionId;
-    const taxDefinitionId =
-      typeof rawTaxDefId === "string" ? rawTaxDefId.trim() : "";
+    const taxDefinitionId = typeof rawTaxDefId === "string"
+      ? rawTaxDefId.trim()
+      : "";
     if (taxDefinitionId) {
       const r2 = (n: number) => Math.round(n * 100) / 100;
       const percent = invoice.taxRate || 0;
       const rate = Math.max(0, Number(percent) || 0) / 100;
       const afterDiscount = r2(invoice.subtotal - invoice.discountAmount);
       const taxable = pricesIncludeTax
-        ? rate > 0
-          ? r2(afterDiscount / (1 + rate))
-          : afterDiscount
+        ? rate > 0 ? r2(afterDiscount / (1 + rate)) : afterDiscount
         : afterDiscount;
       db.query(
         `INSERT INTO invoice_taxes (id, invoice_id, tax_definition_id, percent, taxable_amount, tax_amount, created_at)
@@ -513,27 +598,218 @@ export const createInvoice = (
     ...invoice,
     customer,
     items,
-    taxes:
-      hasPerLineTaxes && perLineCalc
-        ? perLineCalc.summary.map((s) => ({
-            id: "",
-            invoiceId: invoiceId,
-            taxDefinitionId: undefined,
-            percent: s.percent,
-            taxableAmount: s.taxable,
-            taxAmount: s.amount,
-          }))
-        : undefined,
+    taxes: hasPerLineTaxes && perLineCalc
+      ? perLineCalc.summary.map((s) => ({
+        id: "",
+        invoiceId: invoiceId,
+        taxDefinitionId: undefined,
+        percent: s.percent,
+        taxableAmount: s.taxable,
+        taxAmount: s.amount,
+      }))
+      : undefined,
   };
 };
+
+export async function verifyFonepayPayment(id: string): Promise<{
+  verified: boolean;
+  invoice: InvoiceWithDetails | null;
+  transaction?: {
+    id: string;
+    providerTransactionId: string;
+    providerReference?: string;
+    amount: number;
+    verifiedAt: Date;
+  };
+  reason?: string;
+}> {
+  const initial = getInvoiceById(id);
+  if (!initial) return { verified: false, invoice: null, reason: "Invoice not found" };
+  if (initial.paymentMethod !== "Fonepay") {
+    return { verified: false, invoice: initial, reason: "Invoice is not a Fonepay payment" };
+  }
+  if (initial.status === "paid" || initial.status === "complete") {
+    const existingPayment = initial.paymentTransactions?.[0];
+    return {
+      verified: true,
+      invoice: initial,
+      reason: "Payment already verified",
+      ...(existingPayment
+        ? {
+          transaction: {
+            id: existingPayment.id,
+            providerTransactionId: existingPayment.providerTransactionId,
+            providerReference: existingPayment.providerReference,
+            amount: existingPayment.amount,
+            verifiedAt: existingPayment.verifiedAt,
+          },
+        }
+        : {}),
+    };
+  }
+
+  const lastAttempt = verificationAttemptCache.get(id) || 0;
+  if (Date.now() - lastAttempt < VERIFICATION_MIN_INTERVAL_MS) {
+    return { verified: false, invoice: initial, reason: "Fonepay verification was checked recently" };
+  }
+  verificationAttemptCache.set(id, Date.now());
+
+  const references = [initial.fonepayBillId, initial.invoiceNumber, initial.id]
+    .filter((value): value is string => !!value && value.trim().length > 0);
+  const expectedAmount = Number(initial.total);
+  if (references.length === 0 || !Number.isFinite(expectedAmount) || expectedAmount <= 0) {
+    return { verified: false, invoice: initial, reason: "Invoice has no valid Fonepay reference or amount" };
+  }
+
+  const today = new Date();
+  const start = initial.issueDate && !Number.isNaN(initial.issueDate.getTime())
+    ? new Date(initial.issueDate)
+    : new Date(today);
+  const dates: string[] = [];
+  const end = new Date(today);
+  end.setHours(0, 0, 0, 0);
+  const earliestAllowed = new Date(end);
+  earliestAllowed.setDate(earliestAllowed.getDate() - 30);
+  const cursor = new Date(Math.max(start.getTime(), earliestAllowed.getTime()));
+  cursor.setHours(0, 0, 0, 0);
+  while (cursor <= end && dates.length < 31) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  if (dates.length === 0) dates.push(end.toISOString().slice(0, 10));
+
+  let matched: Record<string, unknown> | null = null;
+  for (const date of dates) {
+    const rows = await fetchFonepayReport(date);
+    matched = findMatchingFonepayTransaction(rows, references, expectedAmount);
+    if (matched) break;
+  }
+  if (!matched) {
+    return { verified: false, invoice: getInvoiceById(id), reason: "No matching settled Fonepay transaction found" };
+  }
+
+  const providerTransactionId = fonepayTransactionId(matched);
+  if (!providerTransactionId) {
+    return { verified: false, invoice: getInvoiceById(id), reason: "Fonepay transaction has no stable transaction ID" };
+  }
+  const providerReference = fonepayTransactionReference(matched) || undefined;
+  const matchedAmount = fonepayTransactionAmount(matched);
+  if (matchedAmount === null) {
+    return { verified: false, invoice: getInvoiceById(id), reason: "Fonepay transaction has no valid amount" };
+  }
+
+  const db = getDatabase();
+  const verifiedAt = new Date();
+  const paymentId = generateUUID();
+  db.execute("BEGIN IMMEDIATE");
+  try {
+    const currentRows = db.query(
+      "SELECT status, payment_method, total FROM invoices WHERE id = ?",
+      [id],
+    ) as unknown[][];
+    if (currentRows.length === 0) throw new Error("Invoice not found");
+    const currentStatus = String(currentRows[0][0]);
+    const currentMethod = String(currentRows[0][1] || "");
+    const currentTotal = Number(currentRows[0][2]);
+    if (currentMethod !== "Fonepay") throw new Error("Invoice is no longer a Fonepay payment");
+    if (Math.round(currentTotal * 100) !== Math.round(expectedAmount * 100)) {
+      throw new Error("Invoice total changed; payment verification was cancelled");
+    }
+    if (currentStatus !== "paid" && currentStatus !== "complete") {
+      db.query(
+        `INSERT INTO payment_transactions
+         (id, invoice_id, provider, provider_transaction_id, provider_reference, amount, verified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [paymentId, id, "fonepay", providerTransactionId, providerReference || null, matchedAmount, verifiedAt],
+      );
+      db.query(
+        `UPDATE invoices
+         SET status = 'paid', payment_method = 'Fonepay', fonepay_transaction_id = ?, fonepay_verified_at = ?, updated_at = ?
+         WHERE id = ?`,
+        [providerTransactionId, verifiedAt, verifiedAt, id],
+      );
+      recordStatusChange(
+        db,
+        id,
+        "paid",
+        "Fonepay",
+        `Verified Fonepay transaction ${providerTransactionId}`,
+      );
+    }
+    db.execute("COMMIT");
+  } catch (error) {
+    try {
+      db.execute("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE constraint failed: payment_transactions\.(provider, payment_transactions\.provider_transaction_id|invoice_id, payment_transactions\.provider)/i.test(message) || /UNIQUE constraint failed: payment_transactions\.(provider, provider_transaction_id|invoice_id, provider)/i.test(message)) {
+      const existingRows = db.query(
+        `SELECT id, invoice_id, provider_transaction_id, provider_reference, amount, verified_at
+         FROM payment_transactions
+         WHERE provider = 'fonepay'
+           AND (provider_transaction_id = ? OR invoice_id = ?)
+         ORDER BY verified_at DESC LIMIT 1`,
+        [providerTransactionId, id],
+      ) as unknown[][];
+      const existing = existingRows[0];
+      if (existing && String(existing[1]) === id) {
+        return {
+          verified: true,
+          invoice: getInvoiceById(id),
+          transaction: {
+            id: String(existing[0]),
+            providerTransactionId: String(existing[2]),
+            providerReference: existing[3] ? String(existing[3]) : undefined,
+            amount: Number(existing[4]),
+            verifiedAt: new Date(String(existing[5])),
+          },
+          reason: "Payment already verified",
+        };
+      }
+      return { verified: false, invoice: getInvoiceById(id), reason: "This Fonepay transaction is already linked to another invoice" };
+    }
+    throw error;
+  }
+
+  const invoice = getInvoiceById(id);
+  const persistedRows = db.query(
+    `SELECT id, provider_transaction_id, provider_reference, amount, verified_at
+     FROM payment_transactions
+     WHERE invoice_id = ? AND provider = 'fonepay'
+     ORDER BY verified_at DESC LIMIT 1`,
+    [id],
+  ) as unknown[][];
+  const persisted = persistedRows[0];
+  if (!persisted) {
+    return {
+      verified: true,
+      invoice,
+      reason: "Payment already verified",
+    };
+  }
+  return {
+    verified: true,
+    invoice,
+    transaction: {
+      id: String(persisted[0]),
+      providerTransactionId: String(persisted[1]),
+      providerReference: persisted[2] ? String(persisted[2]) : undefined,
+      amount: Number(persisted[3]),
+      verifiedAt: new Date(String(persisted[4])),
+    },
+  };
+}
 
 export const getInvoices = (): Invoice[] => {
   const db = getDatabase();
   const results = db.query(`
     SELECT id, invoice_number, customer_id, issue_date, due_date, currency, status,
            subtotal, discount_amount, discount_percentage, tax_rate, tax_amount, total,
-           payment_terms, notes, share_token, created_at, updated_at,
-           prices_include_tax, rounding_mode
+           payment_terms, notes, payment_method, fonepay_qr_type, fonepay_qr_data,
+           fonepay_bill_id, fonepay_qr_amount, fonepay_transaction_id, fonepay_verified_at,
+           share_token, created_at, updated_at, prices_include_tax, rounding_mode
     FROM invoices
     ORDER BY created_at DESC
   `);
@@ -547,8 +823,9 @@ export const getInvoiceById = (id: string): InvoiceWithDetails | null => {
     `
     SELECT id, invoice_number, customer_id, issue_date, due_date, currency, status,
            subtotal, discount_amount, discount_percentage, tax_rate, tax_amount, total,
-           payment_terms, notes, share_token, created_at, updated_at,
-           prices_include_tax, rounding_mode
+           payment_terms, notes, payment_method, fonepay_qr_type, fonepay_qr_data,
+           fonepay_bill_id, fonepay_qr_amount, fonepay_transaction_id, fonepay_verified_at,
+           share_token, created_at, updated_at, prices_include_tax, rounding_mode
     FROM invoices
     WHERE id = ?
   `,
@@ -641,7 +918,23 @@ export const getInvoiceById = (id: string): InvoiceWithDetails | null => {
   }));
 
   const statusHistory = getStatusHistory(id);
-  return { ...invoice, customer, items: itemsWithTaxes, taxes, statusHistory };
+  const paymentRows = db.query(
+    `SELECT id, invoice_id, provider, provider_transaction_id, provider_reference, amount, verified_at
+     FROM payment_transactions
+     WHERE invoice_id = ?
+     ORDER BY verified_at DESC`,
+    [id],
+  ) as unknown[][];
+  const paymentTransactions = paymentRows.map((row) => ({
+    id: String(row[0]),
+    invoiceId: String(row[1]),
+    provider: String(row[2]),
+    providerTransactionId: String(row[3]),
+    providerReference: row[4] ? String(row[4]) : undefined,
+    amount: Number(row[5]),
+    verifiedAt: new Date(String(row[6])),
+  }));
+  return { ...invoice, customer, items: itemsWithTaxes, taxes, statusHistory, paymentTransactions };
 };
 
 export const getInvoiceByShareToken = (
@@ -652,8 +945,9 @@ export const getInvoiceByShareToken = (
     `
     SELECT id, invoice_number, customer_id, issue_date, due_date, currency, status,
            subtotal, discount_amount, discount_percentage, tax_rate, tax_amount, total,
-           payment_terms, notes, share_token, created_at, updated_at,
-           prices_include_tax, rounding_mode
+           payment_terms, notes, payment_method, fonepay_qr_type, fonepay_qr_data,
+           fonepay_bill_id, fonepay_qr_amount, fonepay_transaction_id, fonepay_verified_at,
+           share_token, created_at, updated_at, prices_include_tax, rounding_mode
     FROM invoices
     WHERE share_token = ?
   `,
@@ -749,6 +1043,8 @@ export const getInvoiceByShareToken = (
   }));
 
   const statusHistory = getStatusHistory(String(invoice.id));
+  // Public HTML/PDF rendering uses the full invoice internally, but payment
+  // transaction records are never needed in a public share response.
   return { ...invoice, customer, items: itemsWithTaxes, taxes, statusHistory };
 };
 
@@ -768,6 +1064,13 @@ export const updateInvoice = async (
   }
 
   // Validate status transitions
+  if (
+    data.status === "paid" &&
+    existing.paymentMethod === "Fonepay"
+  ) {
+    throw new Error("Fonepay payments must be verified before marking the invoice paid.");
+  }
+
   if (data.status && data.status !== existing.status) {
     const from = existing.status;
     const to = data.status;
@@ -800,6 +1103,7 @@ export const updateInvoice = async (
       "invoiceNumber",
       "subtotal",
       "total",
+      "fonepayQrData",
     ];
     for (const k of forbidden) {
       if ((data as Record<string, unknown>)[k] !== undefined) {
@@ -869,6 +1173,18 @@ export const updateInvoice = async (
     }
   }
 
+  const nextFonepay = normalizeFonepayQrInput(
+    data.paymentMethod ?? existing.paymentMethod,
+    data.fonepayQrType ?? existing.fonepayQrType,
+    data.fonepayQrData ?? existing.fonepayQrData,
+  );
+  const qrTotalChanged =
+    nextFonepay.paymentMethod === "Fonepay" &&
+    nextFonepay.fonepayQrType === "dynamic" &&
+    Math.round(Number(totals.total) * 100) !== Math.round(Number(existing.total) * 100);
+  if (qrTotalChanged) {
+    nextFonepay.fonepayQrData = undefined;
+  }
   const updatedAt = new Date();
 
   // Normalize notes: treat whitespace-only as empty string so it clears stored notes
@@ -886,7 +1202,8 @@ export const updateInvoice = async (
     UPDATE invoices SET
       customer_id = ?, issue_date = ?, due_date = ?, currency = ?, status = ?,
       subtotal = ?, discount_amount = ?, discount_percentage = ?, tax_rate = ?, tax_amount = ?, total = ?,
-      payment_terms = ?, notes = ?, updated_at = ?,
+      payment_terms = ?, notes = ?, payment_method = ?, fonepay_qr_type = ?, fonepay_qr_data = ?,
+      fonepay_bill_id = ?, fonepay_qr_amount = ?, updated_at = ?,
       prices_include_tax = COALESCE(?, prices_include_tax),
       rounding_mode = COALESCE(?, rounding_mode),
       invoice_number = COALESCE(?, invoice_number)
@@ -898,8 +1215,8 @@ export const updateInvoice = async (
         data.dueDate === null || data.dueDate === ""
           ? null
           : data.dueDate
-            ? new Date(data.dueDate)
-            : existing.dueDate,
+          ? new Date(data.dueDate)
+          : existing.dueDate,
         data.currency ?? existing.currency,
         data.status ?? existing.status,
         totals.subtotal,
@@ -910,11 +1227,16 @@ export const updateInvoice = async (
         totals.total,
         data.paymentTerms ?? existing.paymentTerms,
         normalizedNotes !== undefined ? normalizedNotes : existing.notes,
+        nextFonepay.paymentMethod ?? null,
+        nextFonepay.fonepayQrType ?? null,
+        nextFonepay.fonepayQrData ?? null,
+        nextFonepay.paymentMethod === "Fonepay"
+          ? String(data.fonepayBillId ?? existing.fonepayBillId ?? existing.invoiceNumber).trim()
+          : null,
+        nextFonepay.paymentMethod === "Fonepay" ? totals.total : null,
         updatedAt,
         typeof data.pricesIncludeTax === "boolean"
-          ? data.pricesIncludeTax
-            ? 1
-            : 0
+          ? data.pricesIncludeTax ? 1 : 0
           : null,
         data.roundingMode ?? null,
         nextInvoiceNumber ?? null,
@@ -935,6 +1257,10 @@ export const updateInvoice = async (
         "UPDATE invoices SET invoice_number = ?, updated_at = ? WHERE id = ?",
         [finalNum, new Date(), id],
       );
+    }
+
+    if (qrTotalChanged) {
+      db.query("DELETE FROM fonepay_qr_payloads WHERE invoice_id = ?", [id]);
     }
 
     // Record status transition in history
@@ -1050,13 +1376,14 @@ export const updateInvoice = async (
       if (data.items || hasTaxDefinitionIdInRequest) {
         const rawTaxDefId = (data as { taxDefinitionId?: string | null })
           .taxDefinitionId;
-        const requested =
-          typeof rawTaxDefId === "string" ? rawTaxDefId.trim() : "";
+        const requested = typeof rawTaxDefId === "string"
+          ? rawTaxDefId.trim()
+          : "";
         const effectiveTaxDefinitionId = hasTaxDefinitionIdInRequest
           ? requested || undefined
           : existing.taxes && existing.taxes.length > 0
-            ? existing.taxes[0].taxDefinitionId
-            : undefined;
+          ? existing.taxes[0].taxDefinitionId
+          : undefined;
 
         // Replace existing invoice_taxes rows (invoice-level mode only)
         db.query("DELETE FROM invoice_taxes WHERE invoice_id = ?", [id]);
@@ -1065,13 +1392,11 @@ export const updateInvoice = async (
           const r2 = (n: number) => Math.round(n * 100) / 100;
           const percent = (data.taxRate ?? existing.taxRate) || 0;
           const rate = Math.max(0, Number(percent) || 0) / 100;
-          const includeTax =
-            data.pricesIncludeTax ?? existing.pricesIncludeTax ?? false;
+          const includeTax = data.pricesIncludeTax ??
+            existing.pricesIncludeTax ?? false;
           const afterDiscount = r2(totals.subtotal - totals.discountAmount);
           const taxable = includeTax
-            ? rate > 0
-              ? r2(afterDiscount / (1 + rate))
-              : afterDiscount
+            ? rate > 0 ? r2(afterDiscount / (1 + rate)) : afterDiscount
             : afterDiscount;
           db.query(
             `INSERT INTO invoice_taxes (id, invoice_id, tax_definition_id, percent, taxable_amount, tax_amount, created_at)
@@ -1155,9 +1480,10 @@ export const duplicateInvoice = async (
     INSERT INTO invoices (
       id, invoice_number, customer_id, issue_date, due_date, currency, status,
       subtotal, discount_amount, discount_percentage, tax_rate, tax_amount, total,
-      payment_terms, notes, share_token, created_at, updated_at,
-      prices_include_tax, rounding_mode
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      payment_terms, notes, payment_method, fonepay_qr_type, fonepay_qr_data,
+      fonepay_bill_id, fonepay_qr_amount, fonepay_transaction_id, fonepay_verified_at,
+      share_token, created_at, updated_at, prices_include_tax, rounding_mode
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
       [
         newId,
@@ -1175,6 +1501,13 @@ export const duplicateInvoice = async (
         totals.total,
         original.paymentTerms || null,
         original.notes || null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
         newShare,
         now,
         now,
@@ -1375,11 +1708,18 @@ function mapRowToInvoice(row: unknown[]): Invoice {
     total: row[12] as number,
     paymentTerms: row[13] as string,
     notes: row[14] as string,
-    shareToken: row[15] as string,
-    createdAt: new Date(row[16] as string),
-    updatedAt: new Date(row[17] as string),
-    pricesIncludeTax: Boolean(row[18] as number),
-    roundingMode: (row[19] as string) || "line",
+    paymentMethod: row[15] ? String(row[15]) : undefined,
+    fonepayQrType: row[16] === "static" || row[16] === "dynamic" ? row[16] : undefined,
+    fonepayQrData: row[17] ? String(row[17]) : undefined,
+    fonepayBillId: row[18] ? String(row[18]) : undefined,
+    fonepayQrAmount: row[19] == null ? undefined : Number(row[19]),
+    fonepayTransactionId: row[20] ? String(row[20]) : undefined,
+    fonepayVerifiedAt: row[21] ? new Date(String(row[21])) : undefined,
+    shareToken: row[22] as string,
+    createdAt: new Date(row[23] as string),
+    updatedAt: new Date(row[24] as string),
+    pricesIncludeTax: Boolean(row[25] as number),
+    roundingMode: (row[26] as string) || "line",
   };
 }
 
@@ -1391,8 +1731,9 @@ function applyDerivedOverdue<
     inv.status === "paid" ||
     inv.status === "voided" ||
     inv.status === "complete"
-  )
+  ) {
     return inv;
+  }
   if (!inv.dueDate) return inv;
   const today = new Date();
   const dd = new Date(

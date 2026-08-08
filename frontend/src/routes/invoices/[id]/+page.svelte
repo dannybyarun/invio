@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import { FileText, Edit, Copy, ExternalLink, Download, ArrowLeft, MoreHorizontal, FileCode2, ShieldOff, Send, Ban, Trash2, CheckCircle, Upload, Check, Pencil, ChevronDown, Mail } from "lucide-svelte";
+  import { FileText, Edit, Copy, ExternalLink, Download, ArrowLeft, MoreHorizontal, FileCode2, ShieldOff, Send, Ban, Trash2, CheckCircle, Upload, Check, Pencil, ChevronDown, Mail, QrCode } from "lucide-svelte";
   import { enhance } from "$app/forms";
   import { page } from "$app/state";
   import type { SubmitFunction } from "@sveltejs/kit";
@@ -38,6 +38,10 @@
   let canDeleteInvoice = $derived(canDelete && Boolean(invoice && (invoice.status === "draft" || invoice.status === "voided" || (allowProtectedInvoiceChanges && invoice.status !== "voided"))));
 
   let paidPaymentMethod = $state("");
+  let verifyingPayment = $state(false);
+  let generatingQr = $state(false);
+  let paymentVerificationMessage = $state("");
+  let qrImage = $derived(invoice?.fonepayQrType === "dynamic" ? invoice?.fonepayQrData : invoice?.fonepayQrType === "static" ? String(data.settings?.fonepayStaticQr || "/fonepay-static-qr.png") : "");
   let emailSending = $state(false);
   let emailDialog: HTMLDialogElement;
 
@@ -57,6 +61,69 @@
     }
   });
 
+  // Poll only while this invoice is an unpaid Fonepay invoice. The backend
+  // performs the authenticated report lookup and idempotent status transition;
+  // this interval only provides a convenient automatic check in the UI.
+  $effect(() => {
+    if (!invoice || invoice.paymentMethod !== "Fonepay" || invoice.status === "paid" || invoice.status === "complete") {
+      return;
+    }
+    const timer = setInterval(() => {
+      if (!document.hidden && !verifyingPayment) void verifyPaymentNow();
+    }, 30_000);
+    return () => clearInterval(timer);
+  });
+
+  async function generateInvoiceQr() {
+    if (!invoice || invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic") return;
+    generatingQr = true;
+    paymentVerificationMessage = "";
+    try {
+      const response = await fetch(`/api/v1/invoices/${invoice.id}/fonepay-qr`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || typeof body.qrMessage !== "string") throw new Error(body.error || t("Unable to generate Fonepay QR"));
+      const image = await import("qrcode").then(({ default: QRCode }) => QRCode.toDataURL(body.qrMessage, { width: 320, margin: 2 }));
+      const saveResponse = await fetch(`/api/v1/invoices/${invoice.id}/fonepay-qr-image`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, qrMessage: body.qrMessage }),
+      });
+      if (!saveResponse.ok) throw new Error(t("Unable to save the exact Fonepay QR"));
+      window.location.reload();
+    } catch (err) {
+      paymentVerificationMessage = err instanceof Error ? err.message : String(err);
+    } finally {
+      generatingQr = false;
+    }
+  }
+
+  async function verifyPaymentNow() {
+    if (!invoice || invoice.paymentMethod !== "Fonepay") return;
+    verifyingPayment = true;
+    paymentVerificationMessage = "";
+    try {
+      const response = await fetch(`/api/v1/invoices/${invoice.id}/verify-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || t("Unable to verify Fonepay payment"));
+      paymentVerificationMessage = body.verified
+        ? t("Fonepay payment verified")
+        : String(body.reason || t("No matching Fonepay payment found yet"));
+      if (body.verified) window.location.reload();
+    } catch (err) {
+      paymentVerificationMessage = err instanceof Error ? err.message : String(err);
+    } finally {
+      verifyingPayment = false;
+    }
+  }
+
   function openEmailModal() {
     emailDialog?.showModal();
   }
@@ -66,7 +133,7 @@
   }
 
   function fmtMoney(v?: number) {
-    const currency = invoice?.currency || "EUR";
+    const currency = String(invoice?.currency || data.settings?.currency || "USD").trim().toUpperCase();
     try {
       return new Intl.NumberFormat(numberFormatLocale(getLoc()?.locale, getLoc()?.numberFormat), {
         style: "currency",
@@ -347,10 +414,10 @@
               </button>
             </form>
             <div class="dropdown dropdown-end">
-              <button tabindex="0" type="button" class="btn btn-sm btn-primary join-item border-l-primary-content/20 border-l px-2">
+              <button type="button" class="btn btn-sm btn-primary join-item border-l-primary-content/20 border-l px-2">
                 <ChevronDown size={14} />
               </button>
-              <div tabindex="0" class="dropdown-content bg-base-100 rounded-box border-base-200 z-10 mt-1 w-60 space-y-2 border p-3 shadow">
+              <div class="dropdown-content bg-base-100 rounded-box border-base-200 z-10 mt-1 w-60 space-y-2 border p-3 shadow">
                 <p class="text-sm font-medium opacity-70">{t("Payment Method")}</p>
                 <form method="post" use:enhance>
                   <input type="hidden" name="intent" value="mark-paid" />
@@ -493,6 +560,32 @@
         <span class="mr-1 opacity-70">{t("Payment Terms")}:</span>
         <span class="font-medium">{invoice.paymentTerms || "-"}</span>
       </div>
+      {#if invoice.paymentMethod === "Fonepay"}
+        <div class="rounded-box border border-primary/30 bg-primary/5 p-4">
+          <div class="flex items-center gap-2 font-semibold"><QrCode size={18} /> Fonepay</div>
+          {#if qrImage}<img src={qrImage} alt={t("Fonepay payment QR code")} class="mt-3 h-48 w-48 rounded-lg bg-white p-2" />{/if}
+          <p class="mt-2 text-xs opacity-70">{invoice.fonepayQrType === "dynamic" ? t("Dynamic QR for this invoice total") : t("Static merchant QR")}</p>
+          {#if invoice.fonepayQrType === "dynamic" && !invoice.fonepayQrData}
+            <button type="button" class="btn btn-sm btn-outline mt-3" disabled={generatingQr} onclick={generateInvoiceQr}>
+              {#if generatingQr}<span class="loading loading-spinner loading-xs"></span>{/if}{t("Generate payment QR")}
+            </button>
+          {/if}
+          {#if invoice.status !== "paid" && invoice.status !== "complete" && canUpdate}
+            <button type="button" class="btn btn-sm btn-primary mt-3" disabled={verifyingPayment} onclick={verifyPaymentNow}>
+              {#if verifyingPayment}<span class="loading loading-spinner loading-xs"></span>{/if}{t("Check Fonepay payment")}
+            </button>
+            {#if paymentVerificationMessage}<p class="mt-2 text-xs opacity-80">{paymentVerificationMessage}</p>{/if}
+          {/if}
+          {#if invoice.fonepayVerifiedAt}<p class="mt-2 text-xs text-success">{t("Verified")}: {fmtDateTime(new Date(invoice.fonepayVerifiedAt))}</p>{/if}
+          {#if invoice.paymentTransactions?.[0]}
+            <div class="mt-2 space-y-1 text-xs opacity-75">
+              <p>{t("Transaction")}: {invoice.paymentTransactions[0].providerTransactionId}</p>
+              {#if invoice.paymentTransactions[0].providerReference}<p>{t("Reference")}: {invoice.paymentTransactions[0].providerReference}</p>{/if}
+              <p>{t("Verified amount")}: {fmtMoney(invoice.paymentTransactions[0].amount)}</p>
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       <div class="pt-2 opacity-70">
         {invoice.items?.length || 0}

@@ -17,6 +17,7 @@
   const LABEL_MAP: Record<string, string> = {
     dashboard: "Dashboard",
     invoices: "Invoices",
+    "quick-sell": "Quick Sell",
     products: "Products",
     customers: "Customers",
     templates: "Templates",

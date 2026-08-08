@@ -65,6 +65,15 @@ CREATE TABLE invoices (
   payment_terms TEXT,
   notes TEXT,
   
+  -- Payment metadata
+  payment_method TEXT,
+  fonepay_qr_type TEXT,
+  fonepay_qr_data TEXT,
+  fonepay_bill_id TEXT,
+  fonepay_qr_amount NUMERIC,
+  fonepay_transaction_id TEXT,
+  fonepay_verified_at TEXT,
+
   -- System fields
   share_token TEXT UNIQUE NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -72,6 +81,28 @@ CREATE TABLE invoices (
 );
 
 -- Enhanced invoice items table
+CREATE TABLE IF NOT EXISTS fonepay_qr_payloads (
+  invoice_id TEXT PRIMARY KEY REFERENCES invoices(id) ON DELETE CASCADE,
+  qr_message TEXT NOT NULL,
+  amount NUMERIC NOT NULL,
+  bill_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE payment_transactions (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_transaction_id TEXT NOT NULL,
+  provider_reference TEXT,
+  amount NUMERIC NOT NULL,
+  verified_at TEXT NOT NULL,
+  UNIQUE(provider, provider_transaction_id),
+  UNIQUE(invoice_id, provider)
+);
+
+CREATE INDEX idx_payment_transactions_invoice ON payment_transactions(invoice_id, verified_at);
+
 CREATE TABLE invoice_items (
   id TEXT PRIMARY KEY,
   invoice_id TEXT REFERENCES invoices(id) ON DELETE CASCADE,
@@ -116,6 +147,16 @@ CREATE INDEX idx_invoices_customer ON invoices(customer_id);
 CREATE INDEX idx_invoices_status ON invoices(status);
 CREATE INDEX idx_invoices_share_token ON invoices(share_token);
 CREATE INDEX idx_invoice_items_invoice ON invoice_items(invoice_id);
+
+CREATE TABLE IF NOT EXISTS invoice_status_history (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  changed_at TEXT NOT NULL,
+  payment_method TEXT,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_invoice_status_history_invoice_id ON invoice_status_history(invoice_id, changed_at);
 
 -- Normalized tax schema (for complex/composite taxes)
 CREATE TABLE IF NOT EXISTS tax_definitions (
@@ -166,6 +207,7 @@ CREATE TABLE IF NOT EXISTS products (
   description TEXT,
   unit_price NUMERIC NOT NULL DEFAULT 0,
   sku TEXT,
+  barcode TEXT,
   unit TEXT DEFAULT 'piece',
   category TEXT,
   tax_definition_id TEXT REFERENCES tax_definitions(id),
@@ -175,6 +217,7 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 

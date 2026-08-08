@@ -49,15 +49,22 @@ export const handle: Handle = async ({ event, resolve }) => {
     },
   });
 
+  // Shared policy for all normal Invio pages. Fonepay is now a regular
+  // SvelteKit route, so it must not receive the old standalone-dashboard CSP.
   response.headers.set(
     "Content-Security-Policy",
-    `default-src 'none'; ` +
+    `default-src 'self'; ` +
+      `base-uri 'self'; ` +
+      `object-src 'none'; ` +
+      `frame-ancestors 'self'; ` +
       `script-src 'self' 'unsafe-inline'; ` +
-      `style-src 'self' 'unsafe-inline'; ` +
-      `img-src 'self' data: blob:; ` +
-      `font-src 'self' https://fonts.gstatic.com; ` +
-      `connect-src 'self'; ` +
-      `frame-src 'self'; ` +
+      `script-src-elem 'self' 'unsafe-inline'; ` +
+      `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; ` +
+      `style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com; ` +
+      `img-src 'self' data: blob: https:; ` +
+      `font-src 'self' data: https://fonts.gstatic.com; ` +
+      `connect-src 'self' ws: wss:; ` +
+      `worker-src 'self' blob:; ` +
       `manifest-src 'self';`,
   );
 

@@ -201,6 +201,13 @@ function ensureInvoiceColumns(database: DB): void {
     "rounding_mode",
     "TEXT DEFAULT 'line'",
   );
+  addColumnIfMissing(database, "invoices", "payment_method", "TEXT");
+  addColumnIfMissing(database, "invoices", "fonepay_qr_type", "TEXT");
+  addColumnIfMissing(database, "invoices", "fonepay_qr_data", "TEXT");
+  addColumnIfMissing(database, "invoices", "fonepay_bill_id", "TEXT");
+  addColumnIfMissing(database, "invoices", "fonepay_qr_amount", "NUMERIC");
+  addColumnIfMissing(database, "invoices", "fonepay_transaction_id", "TEXT");
+  addColumnIfMissing(database, "invoices", "fonepay_verified_at", "TEXT");
 }
 
 function ensureInvoiceItemColumns(database: DB): void {
@@ -223,6 +230,38 @@ function ensureUserColumns(database: DB): void {
   );
   addColumnIfMissing(database, "users", "two_factor_recovery_codes", "TEXT");
   addColumnIfMissing(database, "users", "oidc_subject", "TEXT");
+}
+
+function ensureFonepayQrPayloadTable(database: DB): void {
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS fonepay_qr_payloads (
+      invoice_id TEXT PRIMARY KEY REFERENCES invoices(id) ON DELETE CASCADE,
+      qr_message TEXT NOT NULL,
+      amount NUMERIC NOT NULL,
+      bill_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+}
+
+function ensurePaymentTransactionsTable(database: DB): void {
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS payment_transactions (
+      id TEXT PRIMARY KEY,
+      invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      provider_transaction_id TEXT NOT NULL,
+      provider_reference TEXT,
+      amount NUMERIC NOT NULL,
+      verified_at TEXT NOT NULL,
+      UNIQUE(provider, provider_transaction_id),
+      UNIQUE(invoice_id, provider)
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_payment_transactions_invoice
+     ON payment_transactions(invoice_id, verified_at)`,
+  );
 }
 
 function ensureStatusHistoryTable(database: DB): void {
@@ -306,7 +345,7 @@ function ensureProductTables(database: DB): void {
   database.execute(`
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
-      unit_price NUMERIC NOT NULL DEFAULT 0, sku TEXT,
+      unit_price NUMERIC NOT NULL DEFAULT 0, sku TEXT, barcode TEXT,
       unit TEXT DEFAULT 'piece', category TEXT,
       tax_definition_id TEXT REFERENCES tax_definitions(id),
       is_active BOOLEAN DEFAULT 1,
@@ -314,6 +353,10 @@ function ensureProductTables(database: DB): void {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  addColumnIfMissing(database, "products", "barcode", "TEXT");
+  database.execute(
+    "CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)",
+  );
   database.execute(`
     CREATE TABLE IF NOT EXISTS product_categories (
       id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
@@ -421,6 +464,13 @@ function migrateInvoicesForVoided(database: DB): void {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         prices_include_tax BOOLEAN DEFAULT 0,
         rounding_mode TEXT DEFAULT 'line',
+        payment_method TEXT,
+        fonepay_qr_type TEXT,
+        fonepay_qr_data TEXT,
+        fonepay_bill_id TEXT,
+        fonepay_qr_amount NUMERIC,
+        fonepay_transaction_id TEXT,
+        fonepay_verified_at TEXT,
         locale TEXT
       )
     `);
@@ -489,6 +539,8 @@ function ensureSchemaUpgrades(database: DB): void {
     migrateInvoicesForVoided(database);
     ensureInvoiceItemColumns(database);
     ensureUserColumns(database);
+    ensureFonepayQrPayloadTable(database);
+    ensurePaymentTransactionsTable(database);
     ensureStatusHistoryTable(database);
   } catch (e) {
     console.warn("Schema upgrade check failed:", e);

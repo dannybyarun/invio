@@ -159,6 +159,40 @@ export async function encryptTwoFactorSecret(
   return `${toBase64Url(iv)}.${toBase64Url(new Uint8Array(encrypted))}`;
 }
 
+export async function encryptFonepaySecret(
+  secret: string,
+): Promise<string> {
+  const key = await getEncryptionKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(secret);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: toArrayBuffer(iv) },
+    key,
+    plain,
+  );
+  return `${toBase64Url(iv)}.${toBase64Url(new Uint8Array(encrypted))}`;
+}
+
+export async function decryptFonepaySecret(
+  encryptedValue: string,
+): Promise<string | null> {
+  try {
+    const [ivB64, dataB64] = encryptedValue.split(".");
+    if (!ivB64 || !dataB64) return null;
+    const iv = fromBase64Url(ivB64);
+    const data = fromBase64Url(dataB64);
+    const key = await getEncryptionKey();
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: toArrayBuffer(iv) },
+      key,
+      toArrayBuffer(data),
+    );
+    return new TextDecoder().decode(plain);
+  } catch {
+    return null;
+  }
+}
+
 export async function decryptTwoFactorSecret(
   encryptedValue: string,
 ): Promise<string | null> {

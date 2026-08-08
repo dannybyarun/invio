@@ -31,6 +31,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     const showPublishedBanner = url.searchParams.get("published") === "1";
     return {
       invoice: invoiceRes.value,
+      settings,
       showPublishedBanner,
       allowProtectedInvoiceChanges,
       emailEnabled: Boolean(env.SMTP_HOST && env.EMAIL_FROM_ADDRESS),
@@ -76,10 +77,14 @@ export const actions: Actions = {
       if (intent === "mark-paid") {
         const paymentMethod =
           data.get("paymentMethod")?.toString().trim() || undefined;
-        await backendPut(`/api/v1/invoices/${id}`, locals.authHeader, {
-          status: "paid",
-          ...(paymentMethod ? { paymentMethod } : {}),
-        });
+        if (paymentMethod === "Fonepay") {
+          await backendPost(`/api/v1/invoices/${id}/verify-payment`, locals.authHeader, {});
+        } else {
+          await backendPut(`/api/v1/invoices/${id}`, locals.authHeader, {
+            status: "paid",
+            ...(paymentMethod ? { paymentMethod } : {}),
+          });
+        }
         throw redirect(303, `/invoices/${id}`);
       }
       if (intent === "duplicate") {

@@ -10,6 +10,7 @@ import {
   publishInvoice,
   unpublishInvoice,
   updateInvoice,
+  verifyFonepayPayment,
   voidInvoice,
 } from "../controllers/invoices.ts";
 import {
@@ -40,6 +41,7 @@ import {
 import {
   createProduct,
   deleteProduct,
+  getProductByCode,
   getProductById,
   getProducts,
   isProductUsedInInvoices,
@@ -70,6 +72,7 @@ import { isEmailConfigured, sendEmail } from "../utils/email.ts";
 import { generateUBLInvoiceXML } from "../utils/ubl.ts"; // legacy direct import
 import { generateInvoiceXML, listXMLProfiles } from "../utils/xmlProfiles.ts";
 import { availableInvoiceLocales } from "../i18n/translations.ts";
+import { generateFonepayQr } from "../utils/fonepay.ts";
 
 import { resetDatabaseFromDemo } from "../database/init.ts";
 import { getNextInvoiceNumber } from "../database/init.ts";
@@ -82,6 +85,7 @@ import {
 import {
   getAuthUser,
   requireAdminAuth,
+  requireAdmin,
   requirePermission,
 } from "../middleware/auth.ts";
 import {
@@ -97,7 +101,9 @@ import {
 import { RESOURCE_ACTIONS, RESOURCES } from "../types/index.ts";
 import {
   createPendingTwoFactorSetup,
+  decryptFonepaySecret,
   decryptTwoFactorSecret,
+  encryptFonepaySecret,
   encryptTwoFactorSecret,
   generateRecoveryCodes,
   hashRecoveryCodes,
@@ -215,6 +221,20 @@ function resolveInvoiceRenderLocale(
 function normalizeLocaleSettingPayload(data: Record<string, unknown>) {
   if (!data) return;
 
+  if (Object.prototype.hasOwnProperty.call(data, "currency")) {
+    const currency = String(data.currency ?? "").trim().toUpperCase();
+    if (currency) data.currency = currency;
+    else delete data.currency;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(data, "companyCountryCode")) {
+    const countryCode = String(data.companyCountryCode ?? "").trim()
+      .toUpperCase();
+    if (/^[A-Z]{2}$/.test(countryCode)) data.companyCountryCode = countryCode;
+    else if (!countryCode) delete data.companyCountryCode;
+    else data.companyCountryCode = countryCode.slice(0, 2);
+  }
+
   // Accept common aliases and normalize to canonical keys
   if (
     !Object.prototype.hasOwnProperty.call(data, "dateFormat") &&
@@ -298,6 +318,45 @@ function normalizeLocaleSettingPayload(data: Record<string, unknown>) {
     (data as Record<string, unknown>).dateFormat =
       rawDateFormat === "DD.MM.YYYY" ? "DD.MM.YYYY" : "YYYY-MM-DD";
   }
+}
+
+async function normalizeFonepaySettingsPayload(
+  data: Record<string, unknown>,
+): Promise<void> {
+  // The encrypted value is server-managed and must never be accepted from a client.
+  delete data.fonepayPasswordEncrypted;
+
+  if (Object.prototype.hasOwnProperty.call(data, "fonepayUsername")) {
+    const username = String(data.fonepayUsername ?? "").trim();
+    if (username) data.fonepayUsername = username;
+    else delete data.fonepayUsername;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(data, "fonepayPassword")) {
+    const password = String(data.fonepayPassword ?? "");
+    delete data.fonepayPassword;
+    if (password) {
+      data.fonepayPasswordEncrypted = await encryptFonepaySecret(password);
+    }
+  }
+}
+
+function sanitizeFonepaySettingsMap(map: Record<string, string>): void {
+  (map as Record<string, unknown>).fonepayConfigured = Boolean(
+    map.fonepayUsername && map.fonepayPasswordEncrypted,
+  );
+  delete map.fonepayPasswordEncrypted;
+  delete (map as Record<string, unknown>).fonepayPassword;
+}
+
+function sanitizeFonepaySettingsResults(
+  settings: Array<{ key: string; value: string }>,
+) {
+  return settings.filter(
+    (setting) =>
+      setting.key !== "fonepayPasswordEncrypted" &&
+      setting.key !== "fonepayPassword",
+  );
 }
 
 function normalizeInvoiceProtectionSettingsPayload(
@@ -435,6 +494,23 @@ adminRoutes.get("/invoices/:id", requirePermission("invoices", "read"), (c) => {
     : undefined;
   return c.json({ ...invoice, issue_date, due_date });
 });
+
+adminRoutes.post(
+  "/invoices/:id/verify-payment",
+  requirePermission("invoices", "update"),
+  async (c) => {
+    const id = c.req.param("id");
+    try {
+      const result = await verifyFonepayPayment(id);
+      return c.json(result, result.invoice ? 200 : 404);
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      if (/gateway|Fonepay/i.test(msg)) return c.json({ error: msg }, 502);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
 
 adminRoutes.put(
   "/invoices/:id",
@@ -940,6 +1016,9 @@ adminRoutes.get("/settings", async (c) => {
   if (!map.allowProtectedInvoiceChanges) {
     map.allowProtectedInvoiceChanges = "false";
   }
+  // Never expose Fonepay credentials or encrypted values through settings.
+  sanitizeFonepaySettingsMap(map);
+
   // Expose demo mode to frontend UI
   (map as Record<string, unknown>).demoMode = DEMO_MODE ? "true" : "false";
   return c.json(map);
@@ -960,10 +1039,16 @@ adminRoutes.put(
     } else if (typeof data.logo === "string") {
       data.logo = normalizeStoredLogoReference(data.logo);
     }
+    // Normalize countryCode alias to companyCountryCode
+    if (typeof data.countryCode === "string" && !data.companyCountryCode) {
+      data.companyCountryCode = data.countryCode;
+      delete data.countryCode;
+    }
     // Normalize tax-related settings
     normalizeTaxSettingsPayload(data);
     normalizeLocaleSettingPayload(data);
     normalizeInvoiceProtectionSettingsPayload(data);
+    await normalizeFonepaySettingsPayload(data);
     const settings = await updateSettings(data);
     try {
       if ("logoUrl" in data) deleteSetting("logoUrl");
@@ -978,7 +1063,7 @@ adminRoutes.put(
         /* ignore */
       }
     }
-    return c.json(settings);
+    return c.json(sanitizeFonepaySettingsResults(settings));
   },
 );
 
@@ -1007,6 +1092,7 @@ adminRoutes.patch(
     normalizeTaxSettingsPayload(data);
     normalizeLocaleSettingPayload(data);
     normalizeInvoiceProtectionSettingsPayload(data);
+    await normalizeFonepaySettingsPayload(data);
     const settings = await updateSettings(data);
     if (typeof data.templateId === "string" && data.templateId) {
       try {
@@ -1020,7 +1106,7 @@ adminRoutes.patch(
     } catch (_e) {
       /* ignore legacy cleanup errors */
     }
-    return c.json(settings);
+    return c.json(sanitizeFonepaySettingsResults(settings));
   },
 );
 
@@ -1038,6 +1124,207 @@ adminRoutes.post(
       return c.json({ logo });
     } catch (e) {
       return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+
+adminRoutes.post(
+  "/settings/fonepay-qr-upload",
+  requirePermission("settings", "update"),
+  async (c) => {
+    try {
+      const form = await c.req.formData();
+      const entry = form.get("file");
+      if (!(entry instanceof File)) return c.json({ error: "Missing file" }, 400);
+      const qrPath = await saveUploadedLogoFile(entry);
+      await setSetting("fonepayStaticQr", qrPath);
+      return c.json({ fonepayStaticQr: qrPath });
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+
+adminRoutes.put(
+  "/invoices/:id/fonepay-qr-image",
+  requirePermission("invoices", "update"),
+  async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json();
+    const image = typeof body?.image === "string" ? body.image.trim() : "";
+    const qrMessage = typeof body?.qrMessage === "string" ? body.qrMessage.trim() : "";
+    if (!qrMessage || !/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(image) || image.length > 1_000_000) {
+      return c.json({ error: "A valid Fonepay QR image is required" }, 400);
+    }
+    const invoice = getInvoiceById(id);
+    if (!invoice) return c.json({ error: "Invoice not found" }, 404);
+    if (invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic") {
+      return c.json({ error: "Invoice is not configured for a dynamic Fonepay QR" }, 400);
+    }
+    if (invoice.fonepayQrData) return c.json({ error: "Fonepay QR is already stored" }, 409);
+    const db = (await import("../database/init.ts")).getDatabase();
+    const payloadRows = db.query(
+      "SELECT qr_message, amount, bill_id FROM fonepay_qr_payloads WHERE invoice_id = ?",
+      [id],
+    ) as unknown[][];
+    const payload = payloadRows[0];
+    if (!payload || String(payload[0]) !== qrMessage || Math.round(Number(payload[1]) * 100) !== Math.round(Number(invoice.total) * 100) || String(payload[2]) !== String(invoice.fonepayBillId || invoice.invoiceNumber)) {
+      return c.json({ error: "QR payload does not match this invoice" }, 409);
+    }
+    db.query("UPDATE invoices SET fonepay_qr_data = ?, fonepay_qr_amount = ?, updated_at = ? WHERE id = ? AND fonepay_qr_data IS NULL", [image, invoice.total, new Date(), id]);
+    return c.json({ ok: true });
+  },
+);
+
+adminRoutes.post(
+  "/invoices/:id/fonepay-qr",
+  requirePermission("invoices", "update"),
+  async (c) => {
+    const id = c.req.param("id");
+    try {
+      const invoice = getInvoiceById(id);
+      if (!invoice) return c.json({ error: "Invoice not found" }, 404);
+      if (invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic") {
+        return c.json({ error: "Invoice is not configured for a dynamic Fonepay QR" }, 400);
+      }
+      const billId = String(invoice.fonepayBillId || invoice.invoiceNumber || "").trim();
+      const amount = Number(invoice.total);
+      if (!billId || !Number.isFinite(amount) || amount <= 0) {
+        return c.json({ error: "Invoice has no valid Fonepay reference or amount" }, 400);
+      }
+      const db = (await import("../database/init.ts")).getDatabase();
+      const existingPayload = db.query(
+        "SELECT qr_message, amount, bill_id FROM fonepay_qr_payloads WHERE invoice_id = ?",
+        [id],
+      ) as unknown[][];
+      const stored = existingPayload[0];
+      if (
+        stored &&
+        Math.round(Number(stored[1]) * 100) === Math.round(amount * 100) &&
+        String(stored[2]) === billId &&
+        String(stored[0]).trim()
+      ) {
+        return c.json({ qrMessage: String(stored[0]) });
+      }
+
+      const generated = await generateFonepayQr(amount, billId);
+      db.query(
+        `INSERT INTO fonepay_qr_payloads
+         (invoice_id, qr_message, amount, bill_id, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(invoice_id) DO UPDATE SET
+           qr_message = excluded.qr_message,
+           amount = excluded.amount,
+           bill_id = excluded.bill_id,
+           created_at = excluded.created_at
+         WHERE fonepay_qr_payloads.amount != excluded.amount
+            OR fonepay_qr_payloads.bill_id != excluded.bill_id`,
+        [id, generated.qrMessage, amount, billId, new Date().toISOString()],
+      );
+      const persisted = db.query(
+        "SELECT qr_message FROM fonepay_qr_payloads WHERE invoice_id = ?",
+        [id],
+      ) as unknown[][];
+      return c.json({
+        qrMessage: String(persisted[0]?.[0] || generated.qrMessage),
+      });
+    } catch (e) {
+      const msg = String(e);
+      return c.json({ error: msg }, /Fonepay|gateway|credentials|terminal/i.test(msg) ? 502 : 400);
+    }
+  },
+);
+
+adminRoutes.post(
+  "/fonepay/qr",
+  requireAdminAuth,
+  requirePermission("invoices", "read"),
+  async (c) => {
+    try {
+      const body = await c.req.json();
+      const amount = Number(body?.amount);
+      const billId = typeof body?.billId === "string" ? body.billId.trim() : "";
+      if (!Number.isFinite(amount) || amount <= 0 || !billId) {
+        return c.json({ error: "A positive amount and bill ID are required" }, 400);
+      }
+      return c.json(await generateFonepayQr(amount, billId));
+    } catch (e) {
+      const msg = String(e);
+      if (/Fonepay|gateway|credentials|terminal/i.test(msg)) return c.json({ error: msg }, 502);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+adminRoutes.post(
+  "/fonepay/session",
+  requireAdminAuth,
+  requirePermission("invoices", "create"),
+  async (c) => {
+    const username = String(getSetting("fonepayUsername") || "").trim();
+    const encryptedPassword = String(
+      getSetting("fonepayPasswordEncrypted") || "",
+    ).trim();
+    if (!username || !encryptedPassword) {
+      return c.json({ error: "Fonepay credentials are not configured" }, 409);
+    }
+
+    const password = await decryptFonepaySecret(encryptedPassword);
+    if (!password) return c.json({ error: "Stored Fonepay credentials are invalid" }, 500);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetch(
+        "https://fonepay.nepdigitalaccess.workers.dev/api/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username,
+            password,
+            secretKey: "",
+            otpCode: "",
+            recaptcha: "",
+          }),
+          signal: controller.signal,
+        },
+      );
+      const textBody = await response.text();
+      let result = null;
+      try {
+        result = textBody ? JSON.parse(textBody) : null;
+      } catch {
+        // Upstream gateways may return HTML or plain text for 403/502 responses.
+      }
+      if (!response.ok || !result?.isSuccess || !result?.accessToken) {
+        console.error("Fonepay upstream login rejected or returned invalid response", {
+          status: response.status,
+          message: typeof result?.message === "string" ? result.message : undefined,
+          contentType: response.headers.get("content-type") || undefined,
+        });
+        const message = response.status === 403
+          ? "Fonepay gateway is blocking the Invio server"
+          : response.status >= 500
+          ? "Fonepay gateway is temporarily unavailable"
+          : "Fonepay login failed";
+        return c.json({ error: message }, 502);
+      }
+      // Return only the fields the dashboard needs. In particular, do not proxy
+      // arbitrary fields from the upstream login response to the browser.
+      return c.json({
+        isSuccess: true,
+        accessToken: String(result.accessToken),
+        merchantId: result.merchantId ?? "",
+        terminalId: result.terminalId ?? "",
+        name: result.name ?? username,
+        userName: username,
+      });
+    } catch (error) {
+      console.error("Fonepay session request failed", error);
+      return c.json({ error: "Fonepay session request failed" }, 502);
+    } finally {
+      clearTimeout(timeout);
     }
   },
 );
@@ -1080,6 +1367,8 @@ adminRoutes.get("/admin/settings", async (c) => {
   if (!map.allowProtectedInvoiceChanges) {
     map.allowProtectedInvoiceChanges = "false";
   }
+  // Never expose Fonepay credentials or encrypted values through settings.
+  sanitizeFonepaySettingsMap(map);
   // Expose demo mode to frontend UI for admin-prefixed route as well
   (map as Record<string, unknown>).demoMode = DEMO_MODE ? "true" : "false";
   return c.json(map);
@@ -1099,17 +1388,23 @@ adminRoutes.put(
     } else if (typeof data.logo === "string") {
       data.logo = normalizeStoredLogoReference(data.logo);
     }
+    // Normalize countryCode alias to companyCountryCode
+    if (typeof data.countryCode === "string" && !data.companyCountryCode) {
+      data.companyCountryCode = data.countryCode;
+      delete data.countryCode;
+    }
     // Normalize tax-related settings
     normalizeTaxSettingsPayload(data);
     normalizeLocaleSettingPayload(data);
     normalizeInvoiceProtectionSettingsPayload(data);
+    await normalizeFonepaySettingsPayload(data);
     const settings = await updateSettings(data);
     try {
       if ("logoUrl" in data) deleteSetting("logoUrl");
     } catch (_e) {
       /* ignore legacy cleanup errors */
     }
-    return c.json(settings);
+    return c.json(sanitizeFonepaySettingsResults(settings));
   },
 );
 
@@ -1127,17 +1422,23 @@ adminRoutes.patch(
     } else if (typeof data.logo === "string") {
       data.logo = normalizeStoredLogoReference(data.logo);
     }
+    // Normalize countryCode alias to companyCountryCode
+    if (typeof data.countryCode === "string" && !data.companyCountryCode) {
+      data.companyCountryCode = data.countryCode;
+      delete data.countryCode;
+    }
     // Normalize tax-related settings
     normalizeTaxSettingsPayload(data);
     normalizeLocaleSettingPayload(data);
     normalizeInvoiceProtectionSettingsPayload(data);
+    await normalizeFonepaySettingsPayload(data);
     const settings = await updateSettings(data);
     try {
       if ("logoUrl" in data) deleteSetting("logoUrl");
     } catch (_e) {
       /* ignore legacy cleanup errors */
     }
-    return c.json(settings);
+    return c.json(sanitizeFonepaySettingsResults(settings));
   },
 );
 
@@ -1203,6 +1504,17 @@ adminRoutes.get("/products", requirePermission("products", "read"), (c) => {
   const products = getProducts(includeInactive);
   return c.json(products);
 });
+
+adminRoutes.get(
+  "/products/lookup",
+  requirePermission("products", "read"),
+  (c) => {
+    const code = c.req.query("code") || "";
+    const product = getProductByCode(code);
+    if (!product) return c.json({ error: "Product not found" }, 404);
+    return c.json(product);
+  },
+);
 
 adminRoutes.get("/products/:id", requirePermission("products", "read"), (c) => {
   const id = c.req.param("id");

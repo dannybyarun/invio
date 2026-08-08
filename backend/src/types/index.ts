@@ -20,6 +20,7 @@ export interface Product {
   description?: string;
   unitPrice: number;
   sku?: string;
+  barcode?: string;
   unit?: string; // piece, hour, day, kg, m, etc.
   category?: string; // service, goods, subscription, etc.
   taxDefinitionId?: string;
@@ -52,6 +53,13 @@ export interface Invoice {
   // Payment and notes
   paymentTerms?: string;
   notes?: string;
+  paymentMethod?: string;
+  fonepayQrType?: "static" | "dynamic";
+  fonepayQrData?: string;
+  fonepayBillId?: string;
+  fonepayQrAmount?: number;
+  fonepayTransactionId?: string;
+  fonepayVerifiedAt?: Date;
 
   // Locale overrides
   locale?: string;
@@ -258,6 +266,11 @@ export interface CreateInvoiceRequest {
   // Payment and notes
   paymentTerms?: string;
   notes?: string;
+  paymentMethod?: string;
+  fonepayQrType?: "static" | "dynamic";
+  fonepayQrData?: string;
+  fonepayBillId?: string;
+  fonepayQrAmount?: number;
 
   // Items
   items: {
@@ -300,6 +313,7 @@ export interface CreateProductRequest {
   description?: string;
   unitPrice: number;
   sku?: string;
+  barcode?: string;
   unit?: string;
   category?: string;
   taxDefinitionId?: string;
@@ -314,12 +328,23 @@ export interface StatusHistoryEntry {
   note?: string;
 }
 
+export interface PaymentTransaction {
+  id: string;
+  invoiceId: string;
+  provider: string;
+  providerTransactionId: string;
+  providerReference?: string;
+  amount: number;
+  verifiedAt: Date;
+}
+
 export interface InvoiceWithDetails extends Invoice {
   customer: Customer;
   items: InvoiceItem[];
   attachments?: InvoiceAttachment[];
   taxes?: InvoiceTax[];
   statusHistory?: StatusHistoryEntry[];
+  paymentTransactions?: PaymentTransaction[];
 }
 
 // Template rendering context
@@ -335,6 +360,7 @@ export interface TemplateContext {
   companyEmail: string;
   companyPhone: string;
   companyTaxId?: string;
+  companyCountryCode?: string;
 
   // Invoice info
   invoiceNumber: string;
@@ -390,6 +416,8 @@ export interface TemplateContext {
   paymentTerms?: string;
   paymentMethods?: string;
   bankAccount?: string;
+  fonepayQrType?: "static" | "dynamic";
+  fonepayQrDataUrl?: string;
 
   // Notes
   notes?: string;

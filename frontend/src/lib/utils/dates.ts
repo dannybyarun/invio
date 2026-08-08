@@ -31,8 +31,9 @@ function formatGregorianDate(
 }
 
 /**
- * Formats the stored Gregorian date and, for Nepali users, appends its
- * Bikram Sambat equivalent. Storage, form values, APIs, and XML remain AD.
+ * Formats the stored Gregorian date and appends its Bikram Sambat equivalent.
+ * The Gregorian date remains primary for every locale. Storage, form values,
+ * APIs, and XML remain AD.
  */
 export function formatDateWithBs(
   value: string | Date | undefined | null,
@@ -51,13 +52,13 @@ export function formatDateWithBs(
       : value;
   if (Number.isNaN(date.getTime())) return "";
 
-  const activeLocale = isNepaliLocale(locale) ? "ne-NP" : locale || "en-US";
+  const isNepali = isNepaliLocale(locale);
+  const activeLocale = isNepali ? "ne-NP" : locale || "en-US";
   const gregorian = formatGregorianDate(date, activeLocale, dateFormat, options);
-  if (!isNepaliLocale(locale)) return gregorian;
 
   try {
-    const bs = new NepaliDate(date).format("YYYY-MM-DD", "np");
-    return `${gregorian} (वि.सं. ${bs})`;
+    const bs = new NepaliDate(date).format("YYYY-MM-DD", isNepali ? "np" : "en");
+    return `${gregorian} (${isNepali ? "वि.सं." : "BS"} ${bs})`;
   } catch {
     // The converter has a finite supported range. Never hide the AD date.
     return gregorian;

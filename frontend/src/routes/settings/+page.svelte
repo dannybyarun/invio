@@ -14,15 +14,24 @@
   let t = getContext("i18n") as (key: string) => string;
   const asBool = (value: unknown) => String(value ?? "false").toLowerCase() === "true";
 
-  let initialSettings = $derived(data.settings || {});
+  function createInitialSettings(source: Record<string, any> | undefined) {
+    return {
+      dateFormat: "YYYY-MM-DD",
+      numberFormat: "comma",
+      postalCityFormat: "auto",
+      ...(source || {}),
+      fonepayPassword: "",
+      allowProtectedInvoiceChanges: asBool(source?.allowProtectedInvoiceChanges),
+    } as Record<string, any>;
+  }
+
+  function readTwoFactorEnabled(source: any): boolean {
+    return Boolean(source?.user?.twoFactorEnabled);
+  }
+
   let baselineSettings = $state({} as Record<string, any>);
-  let settings = $state({
-    dateFormat: "YYYY-MM-DD",
-    numberFormat: "comma",
-    postalCityFormat: "auto",
-    ...initialSettings,
-    allowProtectedInvoiceChanges: asBool((initialSettings as Record<string, unknown>).allowProtectedInvoiceChanges),
-  } as Record<string, any>);
+  let settings = $state({} as Record<string, any>);
+  let settingsInitialized = $state(false);
 
   let saving = $state(false);
   let error = $state("");
@@ -35,7 +44,8 @@
   let otpAuthUrl = $state("");
   let otpQrDataUrl = $state("");
   let recoveryCodes = $state([] as string[]);
-  let twoFactorEnabled = $state(Boolean((data as any)?.user?.twoFactorEnabled));
+  let twoFactorEnabled = $state(false);
+  let twoFactorInitialized = $state(false);
   let twoFactorDisabling = $state(false);
   let twoFactorDisableConfirm = $state(false);
   let twoFactorDisableCode = $state("");
@@ -48,13 +58,14 @@
 
   // Keep settings synced if data.settings changes from an external invalidation
   $effect(() => {
-    if (data.settings) {
+    if (data.settings && !settingsInitialized) {
+      settings = createInitialSettings(data.settings);
       baselineSettings = { ...data.settings };
-      if (Object.keys(settings).length === 0) {
-        settings = { ...data.settings };
-      } else {
-        // Just make sure the references don't break
-      }
+      settingsInitialized = true;
+    }
+    if (!twoFactorInitialized && (data as any)?.user) {
+      twoFactorEnabled = readTwoFactorEnabled(data);
+      twoFactorInitialized = true;
     }
   });
 
@@ -453,7 +464,7 @@
                 ><div class="label">
                   <span class="label-text">{t("Currency")}</span>
                 </div>
-                <input type="text" class="input input-bordered w-full" bind:value={settings.currency} disabled={!canUpdateSettings} />
+                <input type="text" class="input input-bordered w-full" bind:value={settings.currency} oninput={(e) => (settings.currency = e.currentTarget.value.toUpperCase())} maxlength="3" placeholder="NPR" disabled={!canUpdateSettings} />
               </label>
             </div>
             <label class="form-control"
@@ -501,7 +512,7 @@
                 ><div class="label">
                   <span class="label-text">{t("Country Code")}</span>
                 </div>
-                <input type="text" class="input input-bordered w-full" bind:value={settings.companyCountryCode} disabled={!canUpdateSettings} placeholder="US" />
+                <input type="text" class="input input-bordered w-full" bind:value={settings.companyCountryCode} oninput={(e) => (settings.companyCountryCode = e.currentTarget.value.toUpperCase())} maxlength="2" placeholder="NP" disabled={!canUpdateSettings} />
               </label>
             </div>
           </div>
@@ -559,6 +570,31 @@
         {:else if section === "payments"}
           <div class="space-y-4">
             <h2 class="text-xl font-semibold">{t("Payments & Texts")}</h2>
+            <div class="rounded-box border border-info/30 bg-info/10 p-4">
+              <div class="flex items-start gap-3">
+                <CreditCard size={20} class="mt-0.5 shrink-0 text-info" />
+                <div class="space-y-1">
+                  <p class="font-medium">{t("Fonepay dashboard connection")}</p>
+                  <p class="text-sm opacity-80">{t("Store the Fonepay login on the Invio backend. The password is encrypted and is never returned to your browser.")}</p>
+                  {#if settings.fonepayConfigured}
+                    <p class="text-success text-sm font-medium">{t("Fonepay credentials are configured")}</p>
+                  {:else}
+                    <p class="text-warning text-sm">{t("Fonepay credentials are not configured")}</p>
+                  {/if}
+                </div>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label class="form-control">
+                <div class="label"><span class="label-text">{t("Fonepay username")}</span></div>
+                <input type="text" class="input input-bordered w-full" bind:value={settings.fonepayUsername} autocomplete="username" disabled={!canUpdateSettings} />
+              </label>
+              <label class="form-control">
+                <div class="label"><span class="label-text">{t("Fonepay password")}</span></div>
+                <input type="password" class="input input-bordered w-full" bind:value={settings.fonepayPassword} autocomplete="new-password" placeholder={settings.fonepayConfigured ? t("Leave blank to keep current password") : "••••••••"} disabled={!canUpdateSettings} />
+              </label>
+            </div>
+            <p class="text-xs opacity-70">{t("The Fonepay dashboard uses these backend credentials when you open More → Fonepay Dashboard. It does not use browser local storage for the password.")}</p>
             <div class="alert alert-warning">
               <CircleAlert size={16} />
               <span>{t("Allowing edits/deletes for sent or paid invoices can violate invoice retention laws. Only enable this if you understand the legal impact.")}</span>

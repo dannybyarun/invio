@@ -1,8 +1,10 @@
 <script lang="ts">
   import { getContext, onMount, untrack } from "svelte";
-  import { Plus, GripVertical } from "lucide-svelte";
+  import { Plus, GripVertical, QrCode } from "lucide-svelte";
+  import QRCode from "qrcode";
   import { goto } from "$app/navigation";
   import { generateId } from "$lib/utils/id";
+  import { numberFormatLocale } from "$lib/utils/dates";
 
   let { data, invoice = null, formId = "invoice-editor-form" } = $props();
   let initInvoice = untrack(() => invoice);
@@ -13,6 +15,9 @@
 
   let saving = $state(false);
   let error = $state("");
+  let qrLoading = $state(false);
+  let qrDataUrl = $state("");
+  let qrRequestId = 0;
   // Tracks whether the user manually edited the invoice number, as opposed to
   // it just holding the auto-computed preview (which must not be submitted as
   // an explicit override — see the customerId-aware preview effect below).
@@ -21,7 +26,7 @@
   let form = $state({
     customerId: initInvoice?.customerId || "",
     invoiceNumber: initInvoice?.invoiceNumber ?? initNextInvoiceNumber,
-    currency: initInvoice?.currency || "EUR",
+    currency: initInvoice?.currency || initSettings.currency || "USD",
     status: initInvoice?.status || "draft",
     issueDate: initInvoice?.issueDate ? new Date(initInvoice.issueDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
     dueDate: initInvoice?.dueDate ? new Date(initInvoice.dueDate).toISOString().slice(0, 10) : "",
@@ -31,6 +36,10 @@
     roundingMode: initInvoice?.roundingMode || "line",
     paymentTerms: initInvoice?.paymentTerms ?? initSettings.paymentTerms ?? "",
     notes: initInvoice?.notes ?? initSettings.defaultNotes ?? "",
+    paymentMethod: initInvoice?.paymentMethod || "",
+    fonepayQrType: initInvoice?.fonepayQrType || "",
+    fonepayQrData: initInvoice?.fonepayQrData || "",
+    fonepayBillId: initInvoice?.fonepayBillId || "",
   });
 
   let items = $state(
@@ -184,17 +193,120 @@
   );
   let total = $derived(form.pricesIncludeTax === "true" ? subtotal : subtotal + tax); // Simplified for visual parity
 
+  function fmtMoney(value: number) {
+    const currency = String(form.currency || initSettings.currency || "USD").trim().toUpperCase();
+    try {
+      return new Intl.NumberFormat(
+        numberFormatLocale(data.localization?.locale, data.localization?.numberFormat),
+        { style: "currency", currency },
+      ).format(Number(value || 0));
+    } catch {
+      return `${currency} ${Number(value || 0).toFixed(2)}`;
+    }
+  }
+
+  async function prepareFonepayQr() {
+    // A new invoice has no final backend reference yet. Do not contact Fonepay
+    // with a preview QR; the exact QR is generated after the invoice is saved.
+    if (!initInvoice && form.paymentMethod === "Fonepay" && form.fonepayQrType === "dynamic") {
+      qrRequestId += 1;
+      qrLoading = false;
+      form.fonepayQrData = "";
+      qrDataUrl = "";
+      return;
+    }
+    if (form.paymentMethod !== "Fonepay" || !form.fonepayQrType) {
+      qrRequestId += 1;
+      qrLoading = false;
+      form.fonepayQrData = "";
+      qrDataUrl = "";
+      return;
+    }
+    if (form.fonepayQrType === "static") {
+      qrRequestId += 1;
+      qrLoading = false;
+      form.fonepayQrData = "";
+      qrDataUrl = String(data.settings?.fonepayStaticQr || "/fonepay-static-qr.png");
+      return;
+    }
+    if (Number(total) <= 0) {
+      qrRequestId += 1;
+      qrLoading = false;
+      form.fonepayQrData = "";
+      qrDataUrl = "";
+      return;
+    }
+    qrLoading = true;
+    error = "";
+    const requestId = ++qrRequestId;
+    try {
+      const response = await fetch(`/api/v1/invoices/${initInvoice?.id}/fonepay-qr`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || typeof body.qrMessage !== "string" || !body.qrMessage) {
+        throw new Error(body.error || t("Unable to generate Fonepay QR"));
+      }
+      const nextQrData = await QRCode.toDataURL(body.qrMessage, { width: 320, margin: 2 });
+      if (requestId !== qrRequestId) return;
+      form.fonepayQrData = nextQrData;
+      qrDataUrl = nextQrData;
+    } catch (err: any) {
+      if (requestId === qrRequestId) {
+        form.fonepayQrData = "";
+        qrDataUrl = "";
+        throw new Error(err?.message || t("Unable to generate Fonepay QR"));
+      }
+      return;
+    } finally {
+      if (requestId === qrRequestId) qrLoading = false;
+    }
+  }
+
+  async function handleQrTypeChange() {
+    try {
+      await prepareFonepayQr();
+    } catch (err: any) {
+      error = err.message;
+    }
+  }
+
+  $effect(() => {
+    const amount = Number(total);
+    const method = form.paymentMethod;
+    const type = form.fonepayQrType;
+    if (!initInvoice || method !== "Fonepay" || type !== "dynamic" || amount <= 0) {
+      qrRequestId += 1;
+      qrLoading = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      prepareFonepayQr().catch((err: any) => {
+        error = err?.message || t("Unable to generate Fonepay QR");
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  });
+
   async function handleSubmit(e: SubmitEvent | Event) {
     if (e && "preventDefault" in e) e.preventDefault();
     saving = true;
     error = "";
 
     try {
+      await prepareFonepayQr();
       const payload = {
         ...form,
         // Only send an explicit invoice number when creating if the user actually
         // typed one; otherwise let the backend assign it using the real customerId.
-        invoiceNumber: !initInvoice && !invoiceNumberTouched ? undefined : form.invoiceNumber,
+        invoiceNumber: initInvoice ? form.invoiceNumber || undefined : undefined,
+        fonepayQrData: initInvoice ? form.fonepayQrData || undefined : undefined,
+        status: form.paymentMethod === "Fonepay" ? "sent" : form.status,
+        fonepayBillId: initInvoice && form.paymentMethod === "Fonepay"
+          ? String(form.fonepayBillId || form.invoiceNumber || "")
+          : undefined,
         pricesIncludeTax: form.pricesIncludeTax === "true",
         items: items.map((i) => ({
           productId: i.productId || undefined,
@@ -229,6 +341,22 @@
         result = JSON.parse(txt);
       } catch (err: any) {
         throw new Error("JSON parse error: " + err.message + " (Response: " + txt.substring(0, 100) + " )");
+      }
+      if (!initInvoice && form.paymentMethod === "Fonepay" && form.fonepayQrType === "dynamic") {
+        const qrResponse = await fetch(`/api/v1/invoices/${result.id}/fonepay-qr`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        const qrBody = await qrResponse.json().catch(() => ({}));
+        if (!qrResponse.ok || typeof qrBody.qrMessage !== "string") throw new Error(qrBody.error || t("Unable to generate Fonepay QR"));
+        const exactQrData = await QRCode.toDataURL(qrBody.qrMessage, { width: 320, margin: 2 });
+        const updateResponse = await fetch(`/api/v1/invoices/${result.id}/fonepay-qr-image`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: exactQrData, qrMessage: qrBody.qrMessage }),
+        });
+        if (!updateResponse.ok) throw new Error(t("Unable to save the exact Fonepay QR"));
       }
       goto("/invoices/" + result.id);
     } catch (err: any) {
@@ -377,17 +505,17 @@
     <div class="mt-6 flex flex-col items-end space-y-2 text-sm">
       <div class="flex w-48 justify-between">
         <span>{t("Subtotal")}:</span>
-        <span>{subtotal.toFixed(2)}</span>
+        <span>{fmtMoney(subtotal)}</span>
       </div>
       {#if tax > 0}
         <div class="flex w-48 justify-between">
           <span>{t("Tax")}:</span>
-          <span>{tax.toFixed(2)}</span>
+          <span>{fmtMoney(tax)}</span>
         </div>
       {/if}
       <div class="flex w-48 justify-between text-lg font-bold">
         <span>{t("Total")}:</span>
-        <span>{total.toFixed(2)} {form.currency}</span>
+        <span>{fmtMoney(total)}</span>
       </div>
     </div>
   </div>
@@ -439,6 +567,41 @@
       </select>
     </label>
   </div>
+
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <label class="form-control">
+      <div class="label"><span class="label-text">{t("Payment Method")}</span></div>
+      <select class="select select-bordered w-full" bind:value={form.paymentMethod} onchange={handleQrTypeChange}>
+        <option value="">{t("Select payment method")}</option>
+        <option value="Cash">{t("Cash")}</option>
+        <option value="Bank Transfer">{t("Bank transfer")}</option>
+        <option value="Card">{t("Card")}</option>
+        <option value="Fonepay">Fonepay</option>
+      </select>
+    </label>
+    {#if form.paymentMethod === "Fonepay"}
+      <label class="form-control">
+        <div class="label"><span class="label-text">{t("Fonepay QR")}</span></div>
+        <select class="select select-bordered w-full" bind:value={form.fonepayQrType} onchange={handleQrTypeChange}>
+          <option value="">{t("Select QR type")}</option>
+          <option value="static">{t("Static QR")}</option>
+          <option value="dynamic">{t("Dynamic QR")}</option>
+        </select>
+      </label>
+    {/if}
+  </div>
+
+  {#if form.paymentMethod === "Fonepay" && form.fonepayQrType}
+    <div class="rounded-box border border-primary/30 bg-primary/5 p-4">
+      <div class="flex items-center gap-2 font-semibold"><QrCode size={18} /> {form.fonepayQrType === "dynamic" ? t("Dynamic Fonepay QR") : t("Static Fonepay QR")}</div>
+      {#if qrLoading}
+        <span class="loading loading-spinner loading-sm mt-3"></span>
+      {:else if qrDataUrl}
+        <img src={qrDataUrl} alt={t("Fonepay payment QR code")} class="mt-3 h-48 w-48 rounded-lg bg-white p-2" />
+        {#if form.fonepayQrType === "dynamic"}<p class="mt-2 text-xs opacity-70">{t("This QR is generated for the invoice total.")}</p>{/if}
+      {/if}
+    </div>
+  {/if}
 
   <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
     <label class="form-control">

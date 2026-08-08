@@ -17,15 +17,20 @@ export const load = async ({ locals }) => {
   }
 
   try {
-    const products = await backendGet("/api/v1/products", locals.authHeader);
+    const [products, settings] = await Promise.all([
+      backendGet("/api/v1/products", locals.authHeader),
+      backendGet("/api/v1/settings", locals.authHeader).catch(() => ({})),
+    ]);
     return {
       products: products || [],
+      settings: settings || {},
     };
   } catch (err: any) {
     console.error("Failed to load products:", err);
     return {
       error: err.message,
       products: [],
+      settings: {},
     };
   }
 };

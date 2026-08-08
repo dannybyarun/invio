@@ -60,6 +60,13 @@
         </label>
         <input type="text" id="sku" name="sku" class="input input-sm input-bordered w-full" />
       </div>
+
+      <div class="form-control w-full">
+        <label class="label pb-1" for="barcode">
+          <span class="label-text">{t("Barcode")}</span>
+        </label>
+        <input type="text" id="barcode" name="barcode" class="input input-sm input-bordered w-full" inputmode="numeric" autocomplete="off" />
+      </div>
     </div>
 
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
