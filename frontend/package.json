@@ -39,6 +39,7 @@
     "@fontsource-variable/inter": "^5.2.8",
     "daisyui": "^5.5.19",
     "lucide-svelte": "^0.577.0",
+    "nepali-date-converter": "^3.4.0",
     "qrcode": "^1.5.4"
   }
 }

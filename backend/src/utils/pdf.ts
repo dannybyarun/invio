@@ -25,6 +25,14 @@ import {
 } from "../controllers/templates.ts";
 import { getDefaultTemplate } from "../controllers/templates.ts";
 import { getInvoiceLabels } from "../i18n/translations.ts";
+import * as NepaliDateModule from "nepali-date-converter";
+
+type NepaliDateInstance = {
+  format: (pattern: string, language?: "en" | "np") => string;
+};
+const NepaliDate = (NepaliDateModule.default as unknown as {
+  default: new (date: Date) => NepaliDateInstance;
+}).default;
 // pdf-lib is used to embed XML attachments and tweak metadata after rendering
 
 // ---- Basic color helpers ----
@@ -150,18 +158,29 @@ function lighten(hex: string, amount = 0.85): string {
   return `#${rr}${gg}${bb}`;
 }
 
-function formatDate(d?: Date, format: string = "YYYY-MM-DD") {
+function formatDate(
+  d?: Date,
+  format: string = "YYYY-MM-DD",
+  locale?: string,
+) {
   if (!d) return undefined;
   const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return undefined;
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
+  const gregorian = format === "DD.MM.YYYY"
+    ? `${day}.${month}.${year}`
+    : `${year}-${month}-${day}`;
 
-  if (format === "DD.MM.YYYY") {
-    return `${day}.${month}.${year}`;
+  if (!locale?.toLowerCase().startsWith("ne")) return gregorian;
+  try {
+    const bs = new NepaliDate(date).format("YYYY-MM-DD", "np");
+    return `${gregorian} (वि.सं. ${bs})`;
+  } catch {
+    // Keep the Gregorian date if the converter's supported range is exceeded.
+    return gregorian;
   }
-  // Default to YYYY-MM-DD
-  return `${year}-${month}-${day}`;
 }
 
 // Support a single stored 'logo' setting; 'logoUrl' here is a derived, inlined data URL for rendering robustness
@@ -203,22 +222,24 @@ function formatMoney(
   value: number,
   currency: string,
   numberFormat: "comma" | "period" = "comma",
+  locale?: string,
 ): string {
   // Create a custom locale based on the number format preference
-  let locale: string;
+  let formatLocale: string;
   let options: Intl.NumberFormatOptions;
 
-  if (numberFormat === "period") {
+  if (locale?.toLowerCase().startsWith("ne")) {
+    formatLocale = numberFormat === "period" ? "de-NP-u-nu-deva" : "ne-NP";
+  } else if (numberFormat === "period") {
     // European style: 1.000,00
-    locale = "de-DE"; // German locale uses period as thousands separator and comma as decimal
-    options = { style: "currency", currency };
+    formatLocale = "de-DE";
   } else {
     // US style: 1,000.00
-    locale = "en-US";
-    options = { style: "currency", currency };
+    formatLocale = "en-US";
   }
+  options = { style: "currency", currency };
 
-  return new Intl.NumberFormat(locale, options).format(value);
+  return new Intl.NumberFormat(formatLocale, options).format(value);
 }
 
 async function _inlineLogoIfPossible(
@@ -275,6 +296,19 @@ async function _inlineLogoIfPossible(
   }
 }
 
+function formatStatus(status: string, locale: string): string {
+  if (!locale.toLowerCase().startsWith("ne")) return status;
+  const labels: Record<string, string> = {
+    draft: "मस्यौदा",
+    sent: "पठाइयो",
+    paid: "भुक्तानी भयो",
+    complete: "पूरा भयो",
+    overdue: "म्याद नाघेको",
+    voided: "रद्द गरियो",
+  };
+  return labels[status] || status;
+}
+
 function buildContext(
   invoice: InvoiceWithDetails,
   settings?: BusinessSettings & { logoUrl?: string; brandLayout?: string },
@@ -305,8 +339,14 @@ function buildContext(
         t.taxableAmount,
         currency,
         numberFormat || "comma",
+        resolvedLocale,
       ),
-      amount: formatMoney(t.taxAmount, currency, numberFormat || "comma"),
+      amount: formatMoney(
+        t.taxAmount,
+        currency,
+        numberFormat || "comma",
+        resolvedLocale,
+      ),
     }))
     : undefined;
   // Fallback: synthesize a single-row summary from invoice-level taxRate
@@ -320,11 +360,17 @@ function buildContext(
       {
         label: `${taxLabel} ${percent}%`,
         percent,
-        taxable: formatMoney(taxableBase, currency, numberFormat || "comma"),
+        taxable: formatMoney(
+          taxableBase,
+          currency,
+          numberFormat || "comma",
+          resolvedLocale,
+        ),
         amount: formatMoney(
           invoice.taxAmount,
           currency,
           numberFormat || "comma",
+          resolvedLocale,
         ),
       },
     ];
@@ -345,10 +391,10 @@ function buildContext(
 
     // Invoice
     invoiceNumber: invoice.invoiceNumber,
-    issueDate: formatDate(invoice.issueDate, dateFormat)!,
-    dueDate: formatDate(invoice.dueDate, dateFormat),
+    issueDate: formatDate(invoice.issueDate, dateFormat, resolvedLocale)!,
+    dueDate: formatDate(invoice.dueDate, dateFormat, resolvedLocale),
     currency,
-    status: invoice.status,
+    status: formatStatus(invoice.status, resolvedLocale),
 
     // Customer
     customerName: invoice.customer.name,
@@ -374,23 +420,53 @@ function buildContext(
       unit: typeof i.unit === "string" && i.unit.trim().length > 0
         ? i.unit.trim()
         : undefined,
-      unitPrice: formatMoney(i.unitPrice, currency, numberFormat || "comma"),
-      lineTotal: formatMoney(i.lineTotal, currency, numberFormat || "comma"),
+      unitPrice: formatMoney(
+        i.unitPrice,
+        currency,
+        numberFormat || "comma",
+        resolvedLocale,
+      ),
+      lineTotal: formatMoney(
+        i.lineTotal,
+        currency,
+        numberFormat || "comma",
+        resolvedLocale,
+      ),
       notes: i.notes,
     })),
     hasItemUnits,
 
     // Totals
-    subtotal: formatMoney(invoice.subtotal, currency, numberFormat || "comma"),
+    subtotal: formatMoney(
+      invoice.subtotal,
+      currency,
+      numberFormat || "comma",
+      resolvedLocale,
+    ),
     discountAmount: invoice.discountAmount > 0
-      ? formatMoney(invoice.discountAmount, currency, numberFormat || "comma")
+      ? formatMoney(
+        invoice.discountAmount,
+        currency,
+        numberFormat || "comma",
+        resolvedLocale,
+      )
       : undefined,
     discountPercentage: invoice.discountPercentage || undefined,
     taxRate: invoice.taxRate || undefined,
     taxAmount: invoice.taxAmount > 0
-      ? formatMoney(invoice.taxAmount, currency, numberFormat || "comma")
+      ? formatMoney(
+        invoice.taxAmount,
+        currency,
+        numberFormat || "comma",
+        resolvedLocale,
+      )
       : undefined,
-    total: formatMoney(invoice.total, currency, numberFormat || "comma"),
+    total: formatMoney(
+      invoice.total,
+      currency,
+      numberFormat || "comma",
+      resolvedLocale,
+    ),
     taxSummary,
     hasTaxSummary: Boolean(taxSummary && taxSummary.length > 0),
     // Net subtotal (taxable base after discount, before tax) for convenience
@@ -398,6 +474,7 @@ function buildContext(
       Math.max(0, (invoice.subtotal || 0) - (invoice.discountAmount || 0)),
       currency,
       numberFormat || "comma",
+      resolvedLocale,
     ),
 
     // Flags

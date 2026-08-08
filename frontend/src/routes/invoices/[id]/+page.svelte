@@ -7,6 +7,7 @@
 
   import { hasPermission } from "$lib/types";
   import { formatPostalCityLine } from "$lib/address";
+  import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
 
   let { data, form } = $props();
   let t = getContext("i18n") as (key: string) => string;
@@ -61,20 +62,19 @@
   }
 
   function fmtDate(d?: string | Date) {
-    if (!d) return "";
-    const dt = typeof d === "string" ? new Date(d) : d;
-    if (Number.isNaN(dt.getTime())) return "";
-    const year = dt.getFullYear();
-    const month = String(dt.getMonth() + 1).padStart(2, "0");
-    const day = String(dt.getDate()).padStart(2, "0");
-    if (getLoc()?.dateFormat === "DD.MM.YYYY") {
-      return `${day}.${month}.${year}`;
-    }
-    return `${year}-${month}-${day}`;
+    return formatDateWithBs(d, getLoc()?.locale, getLoc()?.dateFormat);
   }
 
   function fmtMoney(v?: number) {
-    return `${Number(v || 0).toFixed(2)} ${invoice?.currency || "EUR"}`;
+    const currency = invoice?.currency || "EUR";
+    try {
+      return new Intl.NumberFormat(numberFormatLocale(getLoc()?.locale, getLoc()?.numberFormat), {
+        style: "currency",
+        currency,
+      }).format(Number(v || 0));
+    } catch {
+      return `${Number(v || 0).toFixed(2)} ${currency}`;
+    }
   }
 
   function fmtDateTime(d: Date) {

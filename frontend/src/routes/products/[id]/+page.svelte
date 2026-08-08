@@ -4,6 +4,7 @@
   import { enhance } from "$app/forms";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { hasPermission } from "$lib/types";
+  import { numberFormatLocale } from "$lib/utils/dates";
 
   let { data } = $props();
   let t = getContext("i18n") as (key: string) => string;
@@ -17,7 +18,7 @@
   function fmtMoney(cur: string | undefined, n: number) {
     if (!cur) cur = "USD";
     try {
-      return new Intl.NumberFormat(data.localization?.numberFormat === "period" ? "de-DE" : "en-US", { style: "currency", currency: cur }).format(n || 0);
+      return new Intl.NumberFormat(numberFormatLocale(data.localization?.locale, data.localization?.numberFormat), { style: "currency", currency: cur }).format(n || 0);
     } catch {
       return `${cur} ${Number(n || 0).toFixed(2)}`;
     }

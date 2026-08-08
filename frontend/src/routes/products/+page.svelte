@@ -1,6 +1,7 @@
 <script lang="ts">
   import { PackagePlus } from "lucide-svelte";
   import { getContext } from "svelte";
+  import { numberFormatLocale } from "$lib/utils/dates";
 
   let { data } = $props();
   let t = getContext("i18n") as (key: string) => string;
@@ -17,7 +18,7 @@
   function fmtMoney(cur: string | undefined, n: number) {
     if (!cur) cur = "USD";
     try {
-      const locale = numberFormat === "period" ? "de-DE" : "en-US";
+      const locale = numberFormatLocale(data.localization?.locale, numberFormat);
       return new Intl.NumberFormat(locale, {
         style: "currency",
         currency: cur,

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ShieldOff } from "lucide-svelte";
   import { getContext } from "svelte";
+  import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
 
   let { data } = $props();
 
@@ -15,7 +16,7 @@
   function fmtMoney(n: number) {
     const cur = data.money?.currency || "USD";
     try {
-      const locale = numberFormat === "period" ? "de-DE" : "en-US";
+      const locale = numberFormatLocale(data.localization?.locale, numberFormat);
       return new Intl.NumberFormat(locale, {
         style: "currency",
         currency: cur,
@@ -224,7 +225,7 @@
             </td>
             <td class="text-right text-sm tabular-nums">
               {#if inv.issueDate}
-                {new Date(inv.issueDate).toLocaleDateString(dateLocale, { year: "numeric", month: "short", day: "numeric" })}
+                {formatDateWithBs(inv.issueDate, dateLocale, data.localization?.dateFormat, { year: "numeric", month: "short", day: "numeric" })}
               {/if}
             </td>
           </tr>

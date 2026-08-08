@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ShieldOff, SquarePen } from "lucide-svelte";
   import { getContext } from "svelte";
+  import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
 
   let { data } = $props();
 
@@ -14,7 +15,7 @@
   function fmtMoney(cur: string | undefined, n: number) {
     if (!cur) cur = "USD";
     try {
-      const locale = numberFormat === "period" ? "de-DE" : "en-US";
+      const locale = numberFormatLocale(data.localization?.locale, numberFormat);
       return new Intl.NumberFormat(locale, {
         style: "currency",
         currency: cur,
@@ -177,7 +178,7 @@
               <a href={`/invoices/${inv.id}`}>{inv.invoiceNumber}</a>
               <div class="text-xs opacity-70 sm:hidden">
                 {#if inv.issueDate}
-                  {new Date(inv.issueDate).toLocaleDateString(dateLocale, { year: "numeric", month: "short", day: "numeric" })}
+                  {formatDateWithBs(inv.issueDate, dateLocale, data.localization?.dateFormat, { year: "numeric", month: "short", day: "numeric" })}
                 {/if}
               </div>
             </td>
@@ -206,7 +207,7 @@
             </td>
             <td class="hidden text-sm tabular-nums sm:table-cell">
               {#if inv.issueDate}
-                {new Date(inv.issueDate).toLocaleDateString(dateLocale, { year: "numeric", month: "short", day: "numeric" })}
+                {formatDateWithBs(inv.issueDate, dateLocale, data.localization?.dateFormat, { year: "numeric", month: "short", day: "numeric" })}
               {/if}
             </td>
             {#if showPaidWith}
@@ -216,7 +217,7 @@
             {/if}
             <td class="hidden text-right text-sm tabular-nums opacity-70 md:table-cell">
               {#if inv.updatedAt}
-                {new Date(inv.updatedAt).toLocaleDateString(dateLocale, { year: "numeric", month: "short", day: "numeric" })}
+                {formatDateWithBs(inv.updatedAt, dateLocale, data.localization?.dateFormat, { year: "numeric", month: "short", day: "numeric" })}
               {/if}
             </td>
           </tr>
