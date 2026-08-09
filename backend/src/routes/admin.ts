@@ -73,6 +73,7 @@ import {
   deleteSupplier,
   getSupplierById,
   getSuppliers,
+  isSupplierUsed,
   updateSupplier,
 } from "../controllers/suppliers.ts";
 import {
@@ -2885,7 +2886,17 @@ adminRoutes.delete(
   requirePermission("suppliers", "delete"),
   (c) => {
     try {
-      deleteSupplier(c.req.param("id"));
+      const id = c.req.param("id");
+      if (isSupplierUsed(id)) {
+        return c.json(
+          {
+            error:
+              "Cannot delete this supplier because they are linked to expenses or purchase orders. Delete or reassign those records first.",
+          },
+          400,
+        );
+      }
+      deleteSupplier(id);
       return c.json({ success: true });
     } catch (e) {
       const msg = String(e);

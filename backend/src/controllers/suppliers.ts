@@ -111,9 +111,14 @@ export const deleteSupplier = (id: string): void => {
 
 export const isSupplierUsed = (id: string): boolean => {
   const db = getDatabase();
-  const rows = db.query(
+  const poRows = db.query(
     "SELECT COUNT(*) FROM purchase_orders WHERE supplier_id = ?",
     [id],
   ) as unknown[][];
-  return Number(rows[0]?.[0] ?? 0) > 0;
+  const expenseRows = db.query(
+    "SELECT COUNT(*) FROM expenses WHERE supplier_id = ?",
+    [id],
+  ) as unknown[][];
+  return Number(poRows[0]?.[0] ?? 0) > 0 ||
+    Number(expenseRows[0]?.[0] ?? 0) > 0;
 };
