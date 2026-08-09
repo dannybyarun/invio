@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Camera, CameraOff, X } from "lucide-svelte";
+  import { BrowserMultiFormatReader } from "@zxing/browser";
+  import { BarcodeFormat, DecodeHintType } from "@zxing/library";
 
   let {
     open = $bindable(false),
@@ -11,16 +13,44 @@
   } = $props();
 
   let video = $state<HTMLVideoElement>();
-  let stream: MediaStream | null = null;
-  let detector: any = null;
+  let scannerControls: { stop: () => void } | null = null;
   let error = $state("");
   let usingCamera = $state(false);
   let manualCode = $state("");
   let facingMode: "environment" | "user" = "environment";
-  let rafId = 0;
+  let stopRequested = false;
 
   const supportsCamera = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
-  const supportsDetector = typeof window !== "undefined" && "BarcodeDetector" in window;
+
+  function makeReader(): BrowserMultiFormatReader {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- ZXing requires a plain Map for decode hints
+    const hints = new Map();
+    hints.set(DecodeHintType.TRY_HARDER, true);
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+      BarcodeFormat.EAN_13,
+      BarcodeFormat.EAN_8,
+      BarcodeFormat.UPC_A,
+      BarcodeFormat.UPC_E,
+      BarcodeFormat.CODE_128,
+      BarcodeFormat.CODE_39,
+      BarcodeFormat.CODE_93,
+      BarcodeFormat.ITF,
+      BarcodeFormat.QR_CODE,
+    ]);
+    return new BrowserMultiFormatReader(hints);
+  }
+
+  async function pickDeviceId(): Promise<string | undefined> {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter((d) => d.kind === "videoinput");
+      if (cams.length <= 1) return cams[0]?.deviceId || undefined;
+      const preferred = cams.find((d) => (facingMode === "environment" ? d.label.toLowerCase().includes("back") || d.label.toLowerCase().includes("rear") : d.label.toLowerCase().includes("front")));
+      return (preferred || cams[0]).deviceId;
+    } catch {
+      return undefined;
+    }
+  }
 
   async function startCamera() {
     error = "";
@@ -29,67 +59,45 @@
       return;
     }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: facingMode } },
-        audio: false,
-      });
-      if (video) {
-        video.srcObject = stream;
-        await video.play();
-      }
-      usingCamera = true;
-      if (supportsDetector) {
-        try {
-          detector = new (window as any).BarcodeDetector({
-            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "code_93", "itf", "qr_code"],
-          });
-          scanLoop();
-        } catch {
-          detector = null;
-          error = "Barcode detection is not available in this browser — use the manual field below.";
+      stopRequested = false;
+      const deviceId = await pickDeviceId();
+      const codeReader = makeReader();
+      const controls = await codeReader.decodeFromVideoDevice(deviceId, video!, (result, err) => {
+        if (stopRequested) return;
+        if (result && result.getText()) {
+          onDetected?.(String(result.getText()));
+          close();
+          return;
         }
-      } else {
-        error = "Barcode detection is not available in this browser — use the manual field below.";
-      }
+        // No result yet — keep scanning; ignore individual frame errors.
+        void err;
+      });
+      scannerControls = controls as unknown as { stop: () => void };
+      usingCamera = true;
     } catch (e) {
       error = e instanceof Error ? e.message : "Could not access camera";
+      usingCamera = false;
     }
-  }
-
-  async function scanLoop() {
-    if (!detector || !usingCamera || !video || video.readyState < 2) {
-      rafId = requestAnimationFrame(scanLoop);
-      return;
-    }
-    try {
-      const codes = await detector.detect(video);
-      if (codes && codes.length > 0 && codes[0].rawValue) {
-        const value = String(codes[0].rawValue);
-        onDetected?.(value);
-        stopCamera();
-        return;
-      }
-    } catch {
-      /* ignore detection frames */
-    }
-    if (usingCamera) rafId = requestAnimationFrame(scanLoop);
   }
 
   function stopCamera() {
-    usingCamera = false;
-    cancelAnimationFrame(rafId);
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-      stream = null;
+    stopRequested = true;
+    if (scannerControls) {
+      try {
+        scannerControls.stop();
+      } catch {
+        /* ignore */
+      }
+      scannerControls = null;
     }
+    usingCamera = false;
     if (video) video.srcObject = null;
-    detector = null;
   }
 
   function switchCamera() {
     facingMode = facingMode === "environment" ? "user" : "environment";
     stopCamera();
-    setTimeout(() => startCamera(), 50);
+    setTimeout(() => startCamera(), 120);
   }
 
   function handleManual() {
@@ -109,7 +117,8 @@
 
   $effect(() => {
     if (open) {
-      startCamera();
+      // Wait a tick so the video element is mounted.
+      setTimeout(() => startCamera(), 50);
     } else {
       stopCamera();
     }
@@ -136,8 +145,8 @@
       <div class="rounded-box border-base-300 relative overflow-hidden border bg-black">
         {#if usingCamera}
           <video bind:this={video} class="aspect-square w-full object-cover" playsinline muted></video>
-
           <div class="bg-primary/80 pointer-events-none absolute inset-x-6 top-1/2 h-0.5 -translate-y-1/2"></div>
+          <span class="absolute top-2 right-2 text-[10px] font-semibold tracking-wider text-white/70 uppercase">Scanning…</span>
         {:else if !error}
           <div class="flex aspect-square w-full flex-col items-center justify-center gap-3 text-white/70">
             <Camera size={36} />
