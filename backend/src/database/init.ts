@@ -528,6 +528,52 @@ function migrateInvoicesForVoided(database: DB): void {
   }
 }
 
+function backfillCompletedInvoicePayments(database: DB): void {
+  // Older releases could mark a non-Fonepay invoice as paid without creating
+  // its manual payment row. Reconcile only the outstanding balance, and make
+  // the operation idempotent so every startup is safe.
+  const rows = database.query(
+    `SELECT i.id, i.invoice_number, i.total, i.payment_method,
+       COALESCE((SELECT SUM(p.amount) FROM invoice_payments p WHERE p.invoice_id = i.id), 0) +
+       COALESCE((SELECT SUM(t.amount) FROM payment_transactions t WHERE t.invoice_id = i.id), 0) AS paid
+     FROM invoices i
+     WHERE i.status IN ('paid', 'complete')
+       AND LOWER(COALESCE(i.payment_method, '')) != 'fonepay'`,
+  ) as unknown[][];
+
+  let repaired = 0;
+  for (const row of rows) {
+    const invoiceId = String(row[0]);
+    const invoiceNumber = String(row[1] || invoiceId);
+    const total = Number(row[2]) || 0;
+    const method = String(row[3] || "Cash").trim() || "Cash";
+    const paid = Number(row[4]) || 0;
+    const outstanding = Math.round(Math.max(0, total - paid) * 100) / 100;
+    if (outstanding <= 0) continue;
+
+    database.query(
+      `INSERT INTO invoice_payments
+       (id, invoice_id, amount, method, reference, note, paid_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        crypto.randomUUID(),
+        invoiceId,
+        outstanding,
+        method,
+        invoiceNumber,
+        "Automatically reconciled for a completed cash sale",
+        new Date().toISOString(),
+        new Date().toISOString(),
+      ],
+    );
+    repaired++;
+  }
+
+  if (repaired > 0) {
+    console.log(`  Reconciled payment records for ${repaired} completed invoice(s).`);
+  }
+}
+
 function ensureBusinessExtras(database: DB): void {
   // ---- Inventory: cost price, stock on hand, reorder level ----
   addColumnIfMissing(database, "products", "cost_price", "NUMERIC DEFAULT 0");
@@ -785,6 +831,11 @@ function ensureSchemaUpgrades(database: DB): void {
     ensurePaymentTransactionsTable(database);
     ensureStatusHistoryTable(database);
     ensureBusinessExtras(database);
+    try {
+      backfillCompletedInvoicePayments(database);
+    } catch (error) {
+      console.error("Completed invoice payment reconciliation failed:", error);
+    }
   } catch (e) {
     console.warn("Schema upgrade check failed:", e);
   }

@@ -70,7 +70,8 @@ function normalizeFonepayQrInput(
   fonepayQrType?: "static" | "dynamic";
   fonepayQrData?: string;
 } {
-  const method = typeof paymentMethod === "string" ? paymentMethod.trim() : "";
+  const rawMethod = typeof paymentMethod === "string" ? paymentMethod.trim() : "";
+  const method = rawMethod.toLowerCase() === "fonepay" ? "Fonepay" : rawMethod;
   if (method !== "Fonepay") {
     return { paymentMethod: method || undefined };
   }
