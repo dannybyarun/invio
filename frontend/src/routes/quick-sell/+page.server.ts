@@ -8,8 +8,11 @@ export const load: PageServerLoad = async ({ locals }) => {
   const canSell =
     locals.user.isAdmin ||
     (locals.user.permissions?.some(
-      (p: any) => p.resource === "invoices" && p.action === "create",
+      (p: any) => p.resource === "quick_sell" && p.action === "use",
     ) &&
+      locals.user.permissions?.some(
+        (p: any) => p.resource === "invoices" && p.action === "create",
+      ) &&
       locals.user.permissions?.some(
         (p: any) => p.resource === "products" && p.action === "read",
       ) &&

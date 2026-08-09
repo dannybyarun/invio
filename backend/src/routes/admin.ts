@@ -635,7 +635,7 @@ adminRoutes.delete(
 // Fiscal-year audit trail: every invoice with items, status history and payments
 adminRoutes.get(
   "/reports/audit",
-  requirePermission("invoices", "read"),
+  requireAdmin,
   (c) => {
     try {
       const audit = getInvoiceAudit();
@@ -649,7 +649,7 @@ adminRoutes.get(
 // Profit & Loss report (optional ?start=YYYY-MM-DD&end=YYYY-MM-DD)
 adminRoutes.get(
   "/reports/profit-loss",
-  requirePermission("invoices", "read"),
+  requireAdmin,
   (c) => {
     try {
       const start = c.req.query("start") || undefined;
@@ -664,7 +664,7 @@ adminRoutes.get(
 // Stock valuation report
 adminRoutes.get(
   "/reports/stock-valuation",
-  requirePermission("invoices", "read"),
+  requireAdmin,
   (c) => {
     try {
       return c.json(getStockValuationReport());
@@ -2766,15 +2766,25 @@ adminRoutes.get("/users/permissions-schema", (c) => {
 });
 
 // GET /users — list all users
-adminRoutes.get("/users", requirePermission("users", "read"), (c) => {
+adminRoutes.get("/users", requireAdmin, (c) => {
   const users = listUsers();
   return c.json(users);
 });
 
 // POST /users — create a new user
-adminRoutes.post("/users", requirePermission("users", "create"), async (c) => {
+adminRoutes.post("/users", requireAdmin, async (c) => {
   try {
     const data = await c.req.json();
+    const currentUser = getAuthUser(c);
+
+    // Only an existing administrator may grant administrator status. Do not
+    // trust the client-side toggle because user-management permissions alone
+    // must not become a privilege-escalation path.
+    if (!currentUser.isAdmin) {
+      delete data.isAdmin;
+      delete data.permissions;
+    }
+
     const user = await createUserCtrl(data);
     return c.json(user, 201);
   } catch (e) {
@@ -2785,7 +2795,7 @@ adminRoutes.post("/users", requirePermission("users", "create"), async (c) => {
 });
 
 // GET /users/:id — get user details
-adminRoutes.get("/users/:id", requirePermission("users", "read"), (c) => {
+adminRoutes.get("/users/:id", requireAdmin, (c) => {
   const id = c.req.param("id");
   const user = getUserByIdCtrl(id);
   if (!user) return c.json({ error: "User not found" }, 404);
@@ -2795,12 +2805,19 @@ adminRoutes.get("/users/:id", requirePermission("users", "read"), (c) => {
 // PUT /users/:id — update user
 adminRoutes.put(
   "/users/:id",
-  requirePermission("users", "update"),
+  requireAdmin,
   async (c) => {
     const id = c.req.param("id");
     try {
       const data = await c.req.json();
       const currentUser = getAuthUser(c);
+
+      // A non-admin may manage ordinary user fields according to their
+      // permissions, but cannot grant, remove, or alter administrator status.
+      if (!currentUser.isAdmin) {
+        delete data.isAdmin;
+        delete data.permissions;
+      }
 
       // Prevent admin from demoting themselves
       if (currentUser.id === id && data.isAdmin === false) {
@@ -2823,7 +2840,7 @@ adminRoutes.put(
 );
 
 // DELETE /users/:id — delete user
-adminRoutes.delete("/users/:id", requirePermission("users", "delete"), (c) => {
+adminRoutes.delete("/users/:id", requireAdmin, (c) => {
   const id = c.req.param("id");
   try {
     deleteUserCtrl(id);
@@ -3415,7 +3432,7 @@ adminRoutes.get(
 // =========================================================
 adminRoutes.get(
   "/dashboard/kpis",
-  requirePermission("invoices", "read"),
+  requireAdmin,
   (c) => {
     try {
       return c.json(getDashboardKpis());

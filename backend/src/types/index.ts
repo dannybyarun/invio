@@ -180,6 +180,7 @@ export interface InvoiceTax {
 
 export const RESOURCES = [
   "invoices",
+  "quick_sell",
   "customers",
   "products",
   "templates",
@@ -198,6 +199,7 @@ export type Resource = (typeof RESOURCES)[number];
 
 export const ACTIONS = [
   "read",
+  "use",
   "create",
   "update",
   "delete",
@@ -212,6 +214,7 @@ export type Action = (typeof ACTIONS)[number];
 /** Defines which actions are meaningful for each resource */
 export const RESOURCE_ACTIONS: Record<Resource, readonly Action[]> = {
   invoices: ["read", "create", "update", "delete", "publish", "void", "export"],
+  quick_sell: ["use"],
   customers: ["read", "create", "update", "delete"],
   products: ["read", "create", "update", "delete"],
   templates: ["read", "create", "update", "delete", "install"],

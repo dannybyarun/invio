@@ -6,13 +6,7 @@ export const load = async ({ locals }) => {
     throw redirect(303, "/login");
   }
 
-  const hasPerm =
-    locals.user.isAdmin ||
-    locals.user.permissions?.some(
-      (p: any) => p.resource === "users" && p.action === "read",
-    );
-
-  if (!hasPerm) {
+  if (!locals.user.isAdmin) {
     throw redirect(303, "/dashboard");
   }
 

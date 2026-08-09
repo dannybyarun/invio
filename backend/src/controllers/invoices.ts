@@ -638,6 +638,33 @@ export const createInvoice = (
   // (Drafts produce no movements; voided/issued states are reconciled.)
   reconcileInvoiceStock(invoiceId);
 
+  // A completed non-Fonepay sale is already settled at the counter. Record
+  // the payment after all invoice data and stock work succeeds so payment
+  // summaries, statements, and reports agree with the completed sale. Fonepay
+  // is intentionally excluded because its payment row is created only after
+  // gateway verification.
+  if (
+    invoice.status === "paid" &&
+    fonepay.paymentMethod !== "Fonepay" &&
+    Number(invoice.total) > 0
+  ) {
+    db.query(
+      `INSERT INTO invoice_payments
+       (id, invoice_id, amount, method, reference, note, paid_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        generateUUID(),
+        invoiceId,
+        invoice.total,
+        fonepay.paymentMethod || "Cash",
+        invoice.invoiceNumber,
+        "Automatically recorded when the sale was completed",
+        now.toISOString(),
+        now.toISOString(),
+      ],
+    );
+  }
+
   return {
     ...invoice,
     customer,
@@ -1568,12 +1595,50 @@ export const updateInvoice = async (
 
     // Record status transition in history
     if (data.status && data.status !== existing.status) {
-      recordStatusChange(
-        db,
-        id,
-        data.status,
-        data.status === "paid" ? data.paymentMethod : undefined,
-      );
+      const paidMethod = data.status === "paid"
+        ? (data.paymentMethod || existing.paymentMethod || "Cash")
+        : undefined;
+      recordStatusChange(db, id, data.status, paidMethod);
+
+      // Directly issuing an invoice as paid (outside the manual-payment
+      // endpoint) must still create the accounting payment record. Record only
+      // the outstanding balance so existing partial payments are not doubled.
+      if (
+        data.status === "paid" &&
+        existing.paymentMethod !== "Fonepay" &&
+        (paidMethod || "Cash") !== "Fonepay"
+      ) {
+        const alreadyPaid = Math.max(
+          0,
+          Number(existing.total || 0) - Number(existing.amountDue ?? existing.total),
+        );
+        const outstanding = Math.round(
+          Math.max(0, Number(totals.total || 0) - alreadyPaid) * 100,
+        ) / 100;
+        if (outstanding > 0) {
+          db.query(
+            `INSERT INTO invoice_payments
+             (id, invoice_id, amount, method, reference, note, paid_at, created_at)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE NOT EXISTS (
+               SELECT 1 FROM invoice_payments
+               WHERE invoice_id = ?
+                 AND note = 'Automatically recorded when the invoice was marked paid'
+             )`,
+            [
+              generateUUID(),
+              id,
+              outstanding,
+              paidMethod || "Cash",
+              existing.invoiceNumber,
+              "Automatically recorded when the invoice was marked paid",
+              new Date().toISOString(),
+              new Date().toISOString(),
+              id,
+            ],
+          );
+        }
+      }
     }
 
     // Update items if provided

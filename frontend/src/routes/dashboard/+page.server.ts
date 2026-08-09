@@ -33,9 +33,14 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
     user.permissions?.some(
       (p) => p.resource === "customers" && p.action === "read",
     );
+  const canViewProducts =
+    user.isAdmin ||
+    user.permissions?.some(
+      (p) => p.resource === "products" && p.action === "read",
+    );
 
   try {
-    const [invoices, customers, settings, kpis] = await Promise.all([
+    const [invoices, customers, settings, kpis, products] = await Promise.all([
       canViewInvoices
         ? (backendGet("/api/v1/invoices", auth) as Promise<Invoice[]>)
         : Promise.resolve([] as Invoice[]),
@@ -45,9 +50,12 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
       backendGet("/api/v1/settings", auth).catch(() => ({})) as Promise<
         Record<string, unknown>
       >,
-      canViewInvoices
+      user.isAdmin
         ? backendGet("/api/v1/dashboard/kpis", auth).catch(() => null)
         : Promise.resolve(null),
+      canViewProducts
+        ? backendGet("/api/v1/products", auth).catch(() => [])
+        : Promise.resolve([]),
     ]);
 
     const currency = (invoices[0]?.currency as string) || "USD";
@@ -79,6 +87,18 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
 
     const version = getVersion();
 
+    const lowStock = (Array.isArray(products) ? products : [])
+      .filter(
+        (product: any) =>
+          (Number(product.reorderLevel) || 0) > 0 &&
+          (Number(product.quantityOnHand) || 0) <= Number(product.reorderLevel),
+      )
+      .map((product: any) => ({
+        id: String(product.id),
+        name: String(product.name || product.id),
+        quantityOnHand: Number(product.quantityOnHand) || 0,
+      }));
+
     return {
       counts: { invoices: invoices.length, customers: customers.length },
       money: { billed, paid, outstanding, currency },
@@ -87,6 +107,7 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
       version,
       dateFormat,
       kpis,
+      lowStock,
     };
   } catch (err) {
     return { error: String(err) };

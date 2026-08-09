@@ -13,6 +13,16 @@
   let canViewInvoices = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "invoices" && p.action === "read"));
   let canViewCustomers = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "customers" && p.action === "read"));
   let canCreateInvoices = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "invoices" && p.action === "create"));
+  let canUseQuickSell = $derived(
+    user?.isAdmin ||
+      (user?.permissions?.some((p) => p.resource === "quick_sell" && p.action === "use") &&
+        user?.permissions?.some((p) => p.resource === "invoices" && p.action === "create") &&
+        user?.permissions?.some((p) => p.resource === "products" && p.action === "read") &&
+        user?.permissions?.some((p) => p.resource === "customers" && p.action === "read") &&
+        user?.permissions?.some((p) => p.resource === "tax_definitions" && p.action === "read")),
+  );
+  let canViewProfit = $derived(Boolean(user?.isAdmin));
+  let maxMonthlyBilled = $derived(Math.max(1, ...(data.kpis?.monthlyTrend || []).map((x) => x.billed)));
 
   function fmtMoney(n: number) {
     const cur = data.money?.currency || "USD";
@@ -30,16 +40,20 @@
 
 <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
   <h1 class="text-2xl font-semibold">{t("Dashboard")}</h1>
-  {#if canViewInvoices && canCreateInvoices}
+  {#if canUseQuickSell || (canViewInvoices && canCreateInvoices)}
     <div class="flex flex-wrap gap-2">
-      <a href="/quick-sell" class="btn btn-primary btn-sm">
-        <Barcode size={16} />
-        {t("Quick Sell")}
-      </a>
-      <a href="/invoices/new" class="btn btn-outline btn-sm">
-        <FilePlus2 size={16} />
-        {t("Create Invoice")}
-      </a>
+      {#if canUseQuickSell}
+        <a href="/quick-sell" class="btn btn-primary btn-sm">
+          <Barcode size={16} />
+          {t("Quick Sell")}
+        </a>
+      {/if}
+      {#if canViewInvoices && canCreateInvoices}
+        <a href="/invoices/new" class="btn btn-outline btn-sm">
+          <FilePlus2 size={16} />
+          {t("Create Invoice")}
+        </a>
+      {/if}
     </div>
   {/if}
 </div>
@@ -201,54 +215,55 @@
   </div>
 {/if}
 
-{#if data.kpis}
+{#if data.kpis || data.lowStock}
   <div class="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-3">
-    <div class="card bg-base-100 border-base-300 rounded-box border lg:col-span-2">
-      <div class="card-body p-4">
-        <div class="mb-3 flex items-center gap-2 font-semibold"><TrendingUp size={16} /> {t("Profit")}</div>
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div>
-            <div class="text-xs opacity-70">{t("Revenue")}</div>
-            <div class="font-bold">{fmtMoney(data.kpis.profit?.revenue)}</div>
+    {#if canViewProfit && data.kpis}
+      <div class="card bg-base-100 border-base-300 rounded-box border lg:col-span-2">
+        <div class="card-body p-4">
+          <div class="mb-3 flex items-center gap-2 font-semibold"><TrendingUp size={16} /> {t("Profit")}</div>
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div>
+              <div class="text-xs opacity-70">{t("Revenue")}</div>
+              <div class="font-bold">{fmtMoney(data.kpis.profit?.revenue)}</div>
+            </div>
+            <div>
+              <div class="text-xs opacity-70">{t("Cost of goods")}</div>
+              <div class="font-bold">{fmtMoney(data.kpis.profit?.cogs)}</div>
+            </div>
+            <div>
+              <div class="text-xs opacity-70">{t("Gross Profit")}</div>
+              <div class="text-success font-bold">{fmtMoney(data.kpis.profit?.grossProfit)}</div>
+            </div>
+            <div>
+              <div class="text-xs opacity-70">{t("Margin")}</div>
+              <div class="font-bold">{data.kpis.profit?.marginPct ?? 0}%</div>
+            </div>
           </div>
-          <div>
-            <div class="text-xs opacity-70">{t("Cost of goods")}</div>
-            <div class="font-bold">{fmtMoney(data.kpis.profit?.cogs)}</div>
-          </div>
-          <div>
-            <div class="text-xs opacity-70">{t("Gross Profit")}</div>
-            <div class="text-success font-bold">{fmtMoney(data.kpis.profit?.grossProfit)}</div>
-          </div>
-          <div>
-            <div class="text-xs opacity-70">{t("Margin")}</div>
-            <div class="font-bold">{data.kpis.profit?.marginPct ?? 0}%</div>
-          </div>
-        </div>
-        <div class="mt-4">
-          <div class="mb-2 text-xs opacity-70">{t("Monthly trend")} ({t("last 6 months")})</div>
-          <div class="flex h-24 items-end gap-1">
-            {#each data.kpis.monthlyTrend || [] as m (m.month)}
-              {@const max = Math.max(1, ...(data.kpis.monthlyTrend || []).map((x) => x.billed))}
-              <div class="group flex flex-1 flex-col items-center gap-1">
-                <div class="tooltip w-full" data-tip={`${m.label}: ${fmtMoney(m.billed)}`}>
-                  <div class="bg-primary/70 w-full rounded" style={`height: ${Math.max(3, Math.round((m.billed / max) * 80))}px`}></div>
+          <div class="mt-4">
+            <div class="mb-2 text-xs opacity-70">{t("Monthly trend")} ({t("last 6 months")})</div>
+            <div class="flex h-24 items-end gap-1">
+              {#each data.kpis.monthlyTrend || [] as m (m.month)}
+                <div class="group flex flex-1 flex-col items-center gap-1">
+                  <div class="tooltip w-full" data-tip={`${m.label}: ${fmtMoney(m.billed)}`}>
+                    <div class="bg-primary/70 w-full rounded" style={`height: ${Math.max(3, Math.round((m.billed / maxMonthlyBilled) * 80))}px`}></div>
+                  </div>
+                  <span class="text-[10px] opacity-60">{m.label}</span>
                 </div>
-                <span class="text-[10px] opacity-60">{m.label}</span>
-              </div>
-            {/each}
+              {/each}
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    {/if}
 
     <div class="card bg-base-100 border-base-300 rounded-box border">
       <div class="card-body p-4">
         <div class="mb-3 flex items-center gap-2 font-semibold"><TriangleAlert size={16} /> {t("Low Stock")}</div>
-        {#if (data.kpis.lowStock || []).length === 0}
+        {#if (data.lowStock || []).length === 0}
           <p class="text-sm opacity-60">{t("All products in stock")}.</p>
         {:else}
           <div class="space-y-2">
-            {#each data.kpis.lowStock as p (p.id)}
+            {#each data.lowStock as p (p.id)}
               <a href={`/products/${p.id}`} class="rounded-box bg-base-200 flex items-center justify-between px-3 py-2 text-sm hover:opacity-80">
                 <span class="flex items-center gap-2 truncate"><Package size={14} class="shrink-0" />{p.name}</span>
                 <span class="badge badge-warning badge-sm">{p.quantityOnHand} {t("left")}</span>
@@ -260,7 +275,7 @@
     </div>
   </div>
 
-  {#if (data.kpis.topProducts || []).length > 0}
+  {#if canViewProfit && (data.kpis.topProducts || []).length > 0}
     <h2 class="mb-3 text-xl font-semibold">{t("Top Products")}</h2>
     <div class="bg-base-100 border-base-300 rounded-box mb-6 overflow-x-auto border">
       <table class="table w-full text-sm">

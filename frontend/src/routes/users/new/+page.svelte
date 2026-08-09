@@ -8,6 +8,7 @@
   let t = getContext("i18n") as (key: string) => string;
 
   let fd = $derived((form?.formData as Record<string, string>) || {});
+  let canManageAdmin = $derived(Boolean(data.user?.isAdmin));
 </script>
 
 <form method="post" use:enhance>
@@ -70,28 +71,36 @@
       <input type="text" id="displayName" name="displayName" class="input input-sm input-bordered w-full" value={fd.displayName || ""} />
     </div>
 
-    <!-- Admin toggle -->
-    <div class="form-control">
-      <label class="label cursor-pointer justify-start gap-3">
-        <input type="checkbox" name="isAdmin" class="toggle toggle-primary" />
-        <span class="label-text">{t("Administrator")}</span>
-      </label>
-      <div class="label pt-1">
-        <span class="label-text-alt">
-          {t("Administrators have full access to all features.")}
-        </span>
+    <!-- Admin toggle (administrators only) -->
+    {#if canManageAdmin}
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="isAdmin" class="toggle toggle-primary" />
+          <span class="label-text">{t("Administrator")}</span>
+        </label>
+        <div class="label pt-1">
+          <span class="label-text-alt">
+            {t("Administrators have full access to all features.")}
+          </span>
+        </div>
       </div>
-    </div>
+    {/if}
 
-    <!-- Permissions -->
-    <div class="form-control">
-      <div class="label">
-        <span class="label-text font-medium">{t("Permissions")}</span>
+    <!-- Permissions (administrators only) -->
+    {#if canManageAdmin}
+      <div class="form-control">
+        <div class="label">
+          <span class="label-text font-medium">{t("Permissions")}</span>
+        </div>
+        <p class="mb-2 text-sm opacity-60">
+          {t("Select which resources and actions this user can access. Admins bypass these checks.")}
+        </p>
+        <PermissionsGrid resourceActions={data.resourceActions || {}} currentPermissions={[]} />
       </div>
-      <p class="mb-2 text-sm opacity-60">
-        {t("Select which resources and actions this user can access. Admins bypass these checks.")}
-      </p>
-      <PermissionsGrid resourceActions={data.resourceActions || {}} currentPermissions={[]} />
-    </div>
+    {:else}
+      <div class="alert alert-info text-sm">
+        <span>{t("Only administrators can assign user permissions.")}</span>
+      </div>
+    {/if}
   </div>
 </form>

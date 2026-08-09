@@ -505,5 +505,6 @@
   "Re-quote": "Re-quote",
   "Create a new quote from this one": "Create a new quote from this one",
   "Failed to re-quote": "Failed to re-quote",
-  "Barcode filled from scan — add the rest and save.": "Barcode filled from scan — add the rest and save."
+  "Barcode filled from scan — add the rest and save.": "Barcode filled from scan — add the rest and save.",
+  "Only administrators can assign user permissions.": "Only administrators can assign user permissions."
 }

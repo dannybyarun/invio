@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { Camera, CameraOff, X } from "lucide-svelte";
   import { BrowserMultiFormatReader } from "@zxing/browser";
   import { BarcodeFormat, DecodeHintType } from "@zxing/library";
@@ -19,6 +19,8 @@
   let manualCode = $state("");
   let facingMode: "environment" | "user" = "environment";
   let stopRequested = false;
+  let startupTimer: ReturnType<typeof setTimeout> | undefined;
+  let startRequestId = 0;
 
   const supportsCamera = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
 
@@ -53,16 +55,21 @@
   }
 
   async function startCamera() {
+    const requestId = ++startRequestId;
     error = "";
+    usingCamera = false;
     if (!supportsCamera) {
       error = "Camera is not supported on this device or browser";
       return;
     }
     try {
       stopRequested = false;
+      await tick();
+      if (stopRequested || requestId !== startRequestId || !video) return;
       const deviceId = await pickDeviceId();
+      if (stopRequested || requestId !== startRequestId || !video) return;
       const codeReader = makeReader();
-      const controls = await codeReader.decodeFromVideoDevice(deviceId, video!, (result, err) => {
+      const controls = await codeReader.decodeFromVideoDevice(deviceId, video, (result, err) => {
         if (stopRequested) return;
         if (result && result.getText()) {
           onDetected?.(String(result.getText()));
@@ -72,6 +79,10 @@
         // No result yet — keep scanning; ignore individual frame errors.
         void err;
       });
+      if (stopRequested || requestId !== startRequestId) {
+        (controls as unknown as { stop: () => void }).stop();
+        return;
+      }
       scannerControls = controls as unknown as { stop: () => void };
       usingCamera = true;
     } catch (e) {
@@ -82,6 +93,11 @@
 
   function stopCamera() {
     stopRequested = true;
+    startRequestId += 1;
+    if (startupTimer) {
+      clearTimeout(startupTimer);
+      startupTimer = undefined;
+    }
     if (scannerControls) {
       try {
         scannerControls.stop();
@@ -97,7 +113,10 @@
   function switchCamera() {
     facingMode = facingMode === "environment" ? "user" : "environment";
     stopCamera();
-    setTimeout(() => startCamera(), 120);
+    startupTimer = setTimeout(() => {
+      startupTimer = undefined;
+      if (open) void startCamera();
+    }, 120);
   }
 
   function handleManual() {
@@ -117,8 +136,11 @@
 
   $effect(() => {
     if (open) {
-      // Wait a tick so the video element is mounted.
-      setTimeout(() => startCamera(), 50);
+      // Keep the video element mounted before ZXing receives it.
+      startupTimer = setTimeout(() => {
+        startupTimer = undefined;
+        void startCamera();
+      }, 50);
     } else {
       stopCamera();
     }
@@ -142,20 +164,20 @@
         </button>
       </div>
 
-      <div class="rounded-box border-base-300 relative overflow-hidden border bg-black">
+      <div class="rounded-box border-base-300 relative aspect-square overflow-hidden border bg-black">
+        <video bind:this={video} class="absolute inset-0 h-full w-full object-cover" autoplay playsinline muted></video>
         {#if usingCamera}
-          <video bind:this={video} class="aspect-square w-full object-cover" playsinline muted></video>
           <div class="bg-primary/80 pointer-events-none absolute inset-x-6 top-1/2 h-0.5 -translate-y-1/2"></div>
           <span class="absolute top-2 right-2 text-[10px] font-semibold tracking-wider text-white/70 uppercase">Scanning…</span>
-        {:else if !error}
-          <div class="flex aspect-square w-full flex-col items-center justify-center gap-3 text-white/70">
-            <Camera size={36} />
-            <span class="text-sm">Starting camera…</span>
-          </div>
-        {:else}
-          <div class="flex aspect-square w-full flex-col items-center justify-center gap-2 p-6 text-center">
+        {:else if error}
+          <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 p-6 text-center">
             <CameraOff size={32} class="text-white/60" />
             <p class="text-sm text-white/80">{error}</p>
+          </div>
+        {:else}
+          <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/30 text-white/70">
+            <Camera size={36} />
+            <span class="text-sm">Starting camera…</span>
           </div>
         {/if}
       </div>

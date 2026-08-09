@@ -98,13 +98,15 @@
         <input type="text" id="displayName" name="displayName" class="input input-sm input-bordered w-full" value={userToEdit.displayName || ""} disabled={!canUpdate} />
       </div>
 
-      <!-- Admin toggle -->
-      <div class="form-control">
-        <label class="label cursor-pointer justify-start gap-3">
-          <input type="checkbox" name="isAdmin" class="toggle toggle-primary" checked={userToEdit.isAdmin} disabled={!canUpdate} />
-          <span class="label-text">{t("Administrator")}</span>
-        </label>
-      </div>
+      <!-- Admin toggle (administrators only) -->
+      {#if loggedInUser?.isAdmin}
+        <div class="form-control">
+          <label class="label cursor-pointer justify-start gap-3">
+            <input type="checkbox" name="isAdmin" class="toggle toggle-primary" checked={userToEdit.isAdmin} disabled={!canUpdate} />
+            <span class="label-text">{t("Administrator")}</span>
+          </label>
+        </div>
+      {/if}
 
       <!-- Active toggle -->
       <div class="form-control">
@@ -119,16 +121,22 @@
         </div>
       </div>
 
-      <!-- Permissions -->
-      <div class="form-control">
-        <div class="label">
-          <span class="label-text font-medium">{t("Permissions")}</span>
+      <!-- Permissions (administrators only) -->
+      {#if loggedInUser?.isAdmin}
+        <div class="form-control">
+          <div class="label">
+            <span class="label-text font-medium">{t("Permissions")}</span>
+          </div>
+          <p class="mb-2 text-sm opacity-60">
+            {t("Select which resources and actions this user can access. Admins bypass these checks.")}
+          </p>
+          <PermissionsGrid resourceActions={data.resourceActions || {}} currentPermissions={userToEdit.permissions || []} disabled={!canUpdate} />
         </div>
-        <p class="mb-2 text-sm opacity-60">
-          {t("Select which resources and actions this user can access. Admins bypass these checks.")}
-        </p>
-        <PermissionsGrid resourceActions={data.resourceActions || {}} currentPermissions={userToEdit.permissions || []} disabled={!canUpdate} />
-      </div>
+      {:else}
+        <div class="alert alert-info text-sm">
+          <span>{t("Only administrators can assign user permissions.")}</span>
+        </div>
+      {/if}
     </div>
   </form>
 
