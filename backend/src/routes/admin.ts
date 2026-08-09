@@ -96,6 +96,7 @@ import {
   convertQuoteToInvoice,
   createQuote,
   deleteQuote,
+  duplicateQuote,
   getQuoteById,
   getQuotes,
   nextQuoteNumber,
@@ -132,6 +133,10 @@ import {
 } from "../controllers/exportCsv.ts";
 import { getDashboardKpis } from "../controllers/dashboard.ts";
 import {
+  getProfitLossReport,
+  getStockValuationReport,
+} from "../controllers/reports.ts";
+import {
   applyStockAdjustment,
   getProductStock,
   getStockMovements,
@@ -145,6 +150,7 @@ import { generateFonepayQr } from "../utils/fonepay.ts";
 
 import { resetDatabaseFromDemo } from "../database/init.ts";
 import { getNextInvoiceNumber } from "../database/init.ts";
+import { closeDatabase, getDatabase, initDatabase } from "../database/init.ts";
 import { getEnv, isDemoMode } from "../utils/env.ts";
 import {
   normalizeStoredLogoReference,
@@ -638,6 +644,176 @@ adminRoutes.get(
     }
   },
 );
+
+// Profit & Loss report (optional ?start=YYYY-MM-DD&end=YYYY-MM-DD)
+adminRoutes.get(
+  "/reports/profit-loss",
+  requirePermission("invoices", "read"),
+  (c) => {
+    try {
+      const start = c.req.query("start") || undefined;
+      const end = c.req.query("end") || undefined;
+      return c.json(getProfitLossReport(start, end));
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+
+// Stock valuation report
+adminRoutes.get(
+  "/reports/stock-valuation",
+  requirePermission("invoices", "read"),
+  (c) => {
+    try {
+      return c.json(getStockValuationReport());
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+
+// Download a full database backup
+adminRoutes.get("/backup/download", requireAdminAuth, async (c) => {
+  const dbPath = getEnv("DATABASE_PATH", "./invio.db")!;
+  try {
+    const bytes = await Deno.readFile(dbPath);
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="invio-backup-${ts}.db"`,
+      },
+    });
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+
+// Restore a database backup (uploads a .db file, swaps it in, re-inits)
+adminRoutes.post("/backup/restore", requireAdminAuth, async (c) => {
+  const dbPath = getEnv("DATABASE_PATH", "./invio.db")!;
+  try {
+    const body = await c.req.arrayBuffer();
+    if (!body || body.byteLength === 0) {
+      return c.json({ error: "Empty upload" }, 400);
+    }
+    const bytes = new Uint8Array(body);
+    const magic = new TextDecoder().decode(bytes.slice(0, 16));
+    if (!magic.startsWith("SQLite format 3")) {
+      return c.json({ error: "Uploaded file is not a SQLite database" }, 400);
+    }
+
+    const tempPath = `${dbPath}.restore-${Date.now()}.tmp`;
+    await Deno.writeFile(tempPath, bytes);
+
+    let checkOk = false;
+    let checkDb:
+      | { query: (sql: string, params?: unknown[]) => unknown[][] }
+      | null = null;
+    try {
+      const { DB } = await import("sqlite");
+      checkDb = new DB(tempPath, { readonly: true });
+      const tables = checkDb.query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('invoices','settings')",
+      ) as unknown[][];
+      const names = new Set(tables.map((r) => String(r[0])));
+      checkOk = names.has("invoices") && names.has("settings");
+    } catch {
+      checkOk = false;
+    } finally {
+      checkDb?.close();
+    }
+    if (!checkOk) {
+      try {
+        await Deno.remove(tempPath);
+      } catch {
+        /* ignore */
+      }
+      return c.json(
+        { error: "Uploaded file is not a valid Invio database" },
+        400,
+      );
+    }
+
+    // Keep a safety copy of the current database before replacing it.
+    try {
+      const safetyPath = `${
+        dbPath.replace(/\.db$/, "")
+      }_prerestore_${Date.now()}.db`;
+      await Deno.copyFile(dbPath, safetyPath);
+    } catch (safetyErr) {
+      return c.json(
+        {
+          error: `Failed to create pre-restore safety copy: ${
+            String(safetyErr)
+          }`,
+        },
+        500,
+      );
+    }
+
+    try {
+      closeDatabase();
+    } catch (e) {
+      return c.json(
+        { error: `Failed to close current database: ${String(e)}` },
+        500,
+      );
+    }
+
+    // Swap the file; always re-initialize so the process never stays dead.
+    try {
+      try {
+        await Deno.rename(tempPath, dbPath);
+      } catch {
+        await Deno.copyFile(tempPath, dbPath);
+      }
+    } catch (e) {
+      try {
+        await initDatabase();
+      } catch {
+        /* original file may be intact; report the swap failure */
+      }
+      return c.json(
+        { error: `Failed to replace database: ${String(e)}` },
+        500,
+      );
+    }
+    try {
+      await initDatabase();
+    } catch (e) {
+      return c.json(
+        { error: `Database replaced but re-init failed: ${String(e)}` },
+        500,
+      );
+    }
+    return c.json({ success: true, message: "Database restored successfully" });
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+
+// Database size/info helper (used by the Settings > Backup & Restore panel)
+adminRoutes.get("/backup/info", requireAdminAuth, (c) => {
+  try {
+    const dbPath = getEnv("DATABASE_PATH", "./invio.db")!;
+    const stat = Deno.statSync(dbPath);
+    const db = getDatabase();
+    const rows = db.query(
+      "SELECT (SELECT COUNT(*) FROM invoices) + (SELECT COUNT(*) FROM customers) + (SELECT COUNT(*) FROM products) + (SELECT COUNT(*) FROM expenses) + (SELECT COUNT(*) FROM quotes) + (SELECT COUNT(*) FROM credit_notes)",
+    ) as unknown[][];
+    return c.json({
+      path: dbPath,
+      sizeBytes: stat.size,
+      sizeHuman: `${(stat.size / 1024 / 1024).toFixed(2)} MB`,
+      recordCount: Number(rows[0][0]) || 0,
+      updatedAt: stat.mtime ? stat.mtime.toISOString() : null,
+    });
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
 
 adminRoutes.post(
   "/invoices/:id/publish",
@@ -2920,6 +3096,18 @@ adminRoutes.post(
       const body = await c.req.json();
       const quote = setQuoteStatus(c.req.param("id"), body.status);
       if (!quote) return c.json({ error: "Quote not found" }, 404);
+      return c.json(quote);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/quotes/:id/duplicate",
+  requirePermission("quotes", "create"),
+  (c) => {
+    try {
+      const quote = duplicateQuote(c.req.param("id"));
       return c.json(quote);
     } catch (e) {
       return c.json({ error: String(e) }, 400);

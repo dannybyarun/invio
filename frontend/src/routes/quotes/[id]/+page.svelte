@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import { FilePlus2, Trash2 } from "lucide-svelte";
+  import { CopyPlus, FilePlus2, Trash2, TriangleAlert } from "lucide-svelte";
   import { enhance } from "$app/forms";
+  import { goto } from "$app/navigation";
   import { hasPermission } from "$lib/types";
   import { numberFormatLocale } from "$lib/utils/dates";
 
@@ -68,6 +69,26 @@
       {#if q.convertedInvoiceId}
         <a href={`/invoices/${q.convertedInvoiceId}`} class="btn btn-sm btn-outline">{t("View Invoice")}</a>
       {/if}
+      {#if canUpdate && q.status !== "converted"}
+        <button
+          type="button"
+          class="btn btn-sm btn-outline"
+          title={t("Create a new quote from this one")}
+          onclick={async () => {
+            try {
+              const res = await fetch(`/api/v1/quotes/${q.id}/duplicate`, { method: "POST" });
+              const body = await res.json();
+              if (!res.ok) throw new Error(body.error || t("Failed to re-quote"));
+              goto(`/quotes/${body.id}`);
+            } catch (e) {
+              alert(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        >
+          <CopyPlus size={16} />
+          {t("Re-quote")}
+        </button>
+      {/if}
       {#if canDelete && q.status !== "converted"}
         <form method="POST" action="?/delete" use:enhance>
           <button type="submit" class="btn btn-sm btn-error" onclick={() => confirm(t("Delete this quote?"))}><Trash2 size={16} /> {t("Delete")}</button>
@@ -76,7 +97,12 @@
     </div>
   </div>
 
-  <div class="mb-4"><span class="badge {statusBadge(q.status)}">{t(q.status[0].toUpperCase() + q.status.slice(1))}</span></div>
+  <div class="mb-4 flex items-center gap-2">
+    <span class="badge {statusBadge(q.status)}">{t(q.status[0].toUpperCase() + q.status.slice(1))}</span>
+    {#if q.isExpired && q.status !== "converted"}
+      <span class="badge badge-error badge-outline gap-1"><TriangleAlert size={12} />{t("Expired")}</span>
+    {/if}
+  </div>
 
   <div class="rounded-box bg-base-100 border-base-300 overflow-x-auto border">
     <table class="table w-full text-sm">

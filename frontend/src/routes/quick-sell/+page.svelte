@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getContext, onMount } from "svelte";
-  import { Barcode, Check, Minus, Plus, Search, ShoppingCart, Trash2, QrCode } from "lucide-svelte";
+  import { Barcode, Camera, Check, Minus, Plus, Search, ShoppingCart, Trash2, QrCode } from "lucide-svelte";
   import QRCode from "qrcode";
+  import BarcodeScannerModal from "$lib/components/BarcodeScannerModal.svelte";
   import { goto } from "$app/navigation";
   import { numberFormatLocale } from "$lib/utils/dates";
 
@@ -29,6 +30,7 @@
   );
   let numberFormat = $derived(data.localization?.numberFormat || "comma");
   let scannerInput = $state("");
+  let scannerModalOpen = $state(false);
   let searchInput = $state("");
   let cart = $state<CartItem[]>([]);
   let customerId = $state("");
@@ -102,6 +104,10 @@
       event.preventDefault();
       lookupCode(scannerInput);
     }
+  }
+
+  function handleDetectedCode(code: string) {
+    lookupCode(code);
   }
 
   let visibleProducts = $derived(
@@ -275,6 +281,8 @@
   }}
 />
 
+<BarcodeScannerModal open={scannerModalOpen} onDetected={handleDetectedCode} />
+
 <div class="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
   <div>
     <div class="text-primary mb-1 text-sm font-semibold tracking-[0.18em] uppercase">{t("Point of sale")}</div>
@@ -295,6 +303,9 @@
           <Barcode size={22} class="text-primary" />
           <input id="scanner-input" bind:this={scanner} bind:value={scannerInput} onkeydown={handleScannerKeydown} placeholder={t("Scan barcode or enter SKU")} autocomplete="off" />
           <kbd class="kbd kbd-sm hidden sm:inline-flex">Enter</kbd>
+          <button type="button" class="btn btn-ghost btn-sm btn-square text-primary" onclick={() => (scannerModalOpen = true)} aria-label={t("Scan with camera")} title={t("Scan with camera")}>
+            <Camera size={20} />
+          </button>
         </label>
         <div class="divider my-2 text-xs opacity-50">{t("or choose a product")}</div>
         <label class="input input-bordered flex w-full items-center gap-2" for="product-search">

@@ -21,15 +21,19 @@ export const load: PageServerLoad = async ({ locals }) => {
       ));
   if (!canSell) throw redirect(303, "/dashboard");
 
-  const [productsRes, customersRes, settingsRes, taxDefinitionsRes] = await Promise.allSettled([
-    backendGet("/api/v1/products", locals.authHeader),
-    backendGet("/api/v1/customers", locals.authHeader),
-    backendGet("/api/v1/settings", locals.authHeader),
-    backendGet("/api/v1/tax-definitions", locals.authHeader),
-  ]);
+  const [productsRes, customersRes, settingsRes, taxDefinitionsRes] =
+    await Promise.allSettled([
+      backendGet("/api/v1/products", locals.authHeader),
+      backendGet("/api/v1/customers", locals.authHeader),
+      backendGet("/api/v1/settings", locals.authHeader),
+      backendGet("/api/v1/tax-definitions", locals.authHeader),
+    ]);
 
   if (taxDefinitionsRes.status !== "fulfilled") {
-    throw error(503, "Quick Sell is temporarily unavailable because tax definitions could not be loaded.");
+    throw error(
+      503,
+      "Quick Sell is temporarily unavailable because tax definitions could not be loaded.",
+    );
   }
 
   return {

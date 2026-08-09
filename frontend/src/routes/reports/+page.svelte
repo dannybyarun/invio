@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getContext } from "svelte";
   import { page } from "$app/state";
-  import { BarChart3, CalendarRange, Printer, ReceiptText, TrendingUp, Wallet } from "lucide-svelte";
+  import { goto } from "$app/navigation";
+  import { BarChart3, Boxes, CalendarRange, Download, Printer, ReceiptText, TrendingUp, Wallet } from "lucide-svelte";
   import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
   import { bsMonthName, currentFiscalYear, fiscalYearLabel, fiscalYearMonths, fiscalYearRange, inFiscalYear, nepaliFiscalYear, parseDateValue } from "$lib/utils/fiscal";
 
@@ -99,8 +100,32 @@
     }),
   );
 
+  // ---- Profit & Loss / Stock valuation ----
+  let view = $state<"summary" | "pl" | "stock" | "audit">("summary");
+  let pl = $derived(data.profitLoss as any);
+  let stockValuation = $derived(data.stockValuation as any);
+  let plStart = $state(page.url.searchParams.get("start") || "");
+  let plEnd = $state(page.url.searchParams.get("end") || "");
+  // Sync the P&L date fields with the selected fiscal year when the user has
+  // not picked a custom range yet.
+  $effect(() => {
+    if (!page.url.searchParams.get("start")) {
+      plStart = String(fiscalYearRange(selectedFy)?.start || "");
+    }
+    if (!page.url.searchParams.get("end")) {
+      plEnd = String(fiscalYearRange(selectedFy)?.end || "");
+    }
+  });
+
+  function applyPlRange() {
+    const params = new URLSearchParams();
+    if (selectedFy) params.set("fy", String(selectedFy));
+    if (plStart) params.set("start", plStart);
+    if (plEnd) params.set("end", plEnd);
+    goto(`/reports?${params.toString()}`);
+  }
+
   // ---- Audit report ----
-  let view = $state<"summary" | "audit">("summary");
   let auditInvoices = $derived(((data.audit || []) as any[]).filter((e: any) => inFiscalYear(e.invoice?.issueDate, selectedFy)));
   let auditSummary = $derived.by(() => {
     let count = 0;
@@ -161,6 +186,25 @@
     return out.sort((a, b) => new Date(b.payment.verifiedAt).getTime() - new Date(a.payment.verifiedAt).getTime());
   });
 
+  function exportStockCsv() {
+    const items = stockValuation?.items || [];
+    const esc = (v: unknown): string => {
+      const s = String(v ?? "");
+      return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const rows = [
+      ["Product", "SKU", "Barcode", "On hand", "Cost", "Value", "Reorder level"],
+      ...items.map((i: any) => [i.name, i.sku || "", i.barcode || "", String(i.quantityOnHand), String(i.costPrice), String(i.value), String(i.reorderLevel)]),
+    ];
+    const csv = "\uFEFF" + rows.map((r) => r.map(esc).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "stock-valuation.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   function statusLabel(status: string): string {
     const map: Record<string, string> = {
       draft: t("Draft"),
@@ -216,12 +260,14 @@
   {/if}
 </div>
 
-<div class="tabs tabs-boxed mb-4 w-fit">
+<div class="tabs tabs-boxed mb-4 w-fit flex-wrap">
   <button type="button" class={`tab ${view === "summary" ? "tab-active" : ""}`} onclick={() => (view = "summary")}>{t("Fiscal Summary")}</button>
+  <button type="button" class={`tab ${view === "pl" ? "tab-active" : ""}`} onclick={() => (view = "pl")}>{t("Profit & Loss")}</button>
+  <button type="button" class={`tab ${view === "stock" ? "tab-active" : ""}`} onclick={() => (view = "stock")}>{t("Stock Valuation")}</button>
   <button type="button" class={`tab ${view === "audit" ? "tab-active" : ""}`} onclick={() => (view = "audit")}>{t("Audit Report")}</button>
 </div>
 
-{#if invoices.length === 0}
+{#if invoices.length === 0 && (view === "summary" || view === "audit")}
   <div class="bg-base-100 border-base-300 rounded-box border py-12 text-center">
     <div class="bg-base-200 mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full">
       <BarChart3 size={22} class="opacity-50" />
@@ -345,6 +391,187 @@
       </tbody>
     </table>
   </div>
+{:else if view === "pl"}
+  <div class="bg-base-100 border-base-300 rounded-box mb-4 border p-4">
+    <div class="flex flex-wrap items-end gap-3">
+      <label class="form-control">
+        <span class="label-text mb-1 text-xs font-medium opacity-70">{t("From")}</span>
+        <input type="date" class="input input-bordered input-sm" bind:value={plStart} />
+      </label>
+      <label class="form-control">
+        <span class="label-text mb-1 text-xs font-medium opacity-70">{t("To")}</span>
+        <input type="date" class="input input-bordered input-sm" bind:value={plEnd} />
+      </label>
+      <button type="button" class="btn btn-primary btn-sm" onclick={applyPlRange}>
+        <CalendarRange size={15} />
+        {t("Apply")}
+      </button>
+      {#if pl?.lastUpdated}
+        <span class="text-xs opacity-60">{t("Last updated")}: {pl.lastUpdated?.slice(0, 10)}</span>
+      {/if}
+    </div>
+  </div>
+
+  {#if !pl}
+    <div class="alert alert-info"><span>{t("No report data available")}</span></div>
+  {:else}
+    <div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><TrendingUp size={16} class="text-primary" /><span>{t("Revenue")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(pl.revenue)}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><Boxes size={16} class="text-primary" /><span>{t("COGS")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(pl.cogs)}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><TrendingUp size={16} class="text-success" /><span>{t("Gross profit")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(pl.grossProfit)}</div>
+          <div class="text-xs opacity-60">{pl.grossMarginPercent}%</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><Wallet size={16} class="text-warning" /><span>{t("Expenses")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(pl.expenses)}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><ReceiptText size={16} class="text-error" /><span>{t("Credit notes")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(pl.creditNotes)}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><TrendingUp size={16} class="text-success" /><span>{t("Net profit")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(pl.netProfit)}</div>
+          <div class="text-xs opacity-60">{pl.netMarginPercent}% {t("margin")}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div class="bg-base-100 border-base-300 rounded-box overflow-x-auto border">
+        <div class="border-base-300 border-b px-4 py-3 font-semibold">{t("Revenue by invoice")}</div>
+        <table class="table w-full whitespace-nowrap">
+          <thead class="bg-base-200">
+            <tr>
+              <th>{t("Invoice No")}</th>
+              <th class="text-right">{t("Amount")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each pl.revenueRows || [] as row (row.label + row.amount)}
+              <tr class="hover">
+                <td class="font-medium">{row.label}</td>
+                <td class="text-right font-medium tabular-nums">{fmtMoney(row.amount)}</td>
+              </tr>
+            {:else}
+              <tr><td colspan="2" class="py-6 text-center opacity-50">{t("No revenue in this range")}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+      <div class="bg-base-100 border-base-300 rounded-box overflow-x-auto border">
+        <div class="border-base-300 border-b px-4 py-3 font-semibold">{t("Expenses by category")}</div>
+        <table class="table w-full whitespace-nowrap">
+          <thead class="bg-base-200">
+            <tr>
+              <th>{t("Category")}</th>
+              <th class="text-right">{t("Amount")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each pl.expenseRows || [] as row (row.label + row.amount)}
+              <tr class="hover">
+                <td>{row.label}</td>
+                <td class="text-right font-medium tabular-nums">{fmtMoney(row.amount)}</td>
+              </tr>
+            {:else}
+              <tr><td colspan="2" class="py-6 text-center opacity-50">{t("No expenses in this range")}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {/if}
+{:else if view === "stock"}
+  {#if !stockValuation}
+    <div class="alert alert-info"><span>{t("No stock data available")}</span></div>
+  {:else}
+    <div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><Boxes size={16} class="text-primary" /><span>{t("Stock value")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(stockValuation.totalValue)}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><Boxes size={16} class="text-primary" /><span>{t("Total quantity")}</span></div>
+          <div class="text-xl font-bold">{stockValuation.totalQuantity}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><CalendarRange size={16} class="text-warning" /><span>{t("Low stock items")}</span></div>
+          <div class="text-xl font-bold">{stockValuation.lowStockCount}</div>
+        </div>
+      </div>
+      <div class="card bg-base-100 border-base-300 border shadow-sm">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-center gap-2 text-sm opacity-70"><Wallet size={16} class="text-error" /><span>{t("Reorder cost")}</span></div>
+          <div class="text-xl font-bold">{fmtMoney(stockValuation.reorderCost)}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-base-100 border-base-300 rounded-box overflow-x-auto border">
+      <div class="border-base-300 flex items-center justify-between border-b px-4 py-3">
+        <span class="text-lg font-semibold">{t("Inventory valuation")}</span>
+        <button type="button" class="btn btn-outline btn-sm no-print" onclick={exportStockCsv}>
+          <Download size={15} />
+          {t("Export CSV")}
+        </button>
+      </div>
+      <table class="table w-full whitespace-nowrap">
+        <thead class="bg-base-200">
+          <tr>
+            <th>{t("Product")}</th>
+            <th>{t("SKU")}</th>
+            <th>{t("Barcode")}</th>
+            <th class="text-right">{t("On hand")}</th>
+            <th class="text-right">{t("Cost")}</th>
+            <th class="text-right">{t("Value")}</th>
+            <th class="text-right">{t("Reorder level")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each stockValuation.items || [] as item (item.productId)}
+            <tr class="hover">
+              <td class="font-medium">{item.name}</td>
+              <td class="text-sm opacity-70">{item.sku || "—"}</td>
+              <td class="text-sm opacity-70">{item.barcode || "—"}</td>
+              <td class="text-right tabular-nums">
+                <span class="badge {item.lowStock ? 'badge-warning' : 'badge-ghost'}">{item.quantityOnHand}</span>
+              </td>
+              <td class="text-right tabular-nums">{fmtMoney(item.costPrice)}</td>
+              <td class="text-right font-medium tabular-nums">{fmtMoney(item.value)}</td>
+              <td class="text-right tabular-nums opacity-70">{item.reorderLevel || 0}</td>
+            </tr>
+          {:else}
+            <tr><td colspan="7" class="py-8 text-center opacity-50">{t("No products")}</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
 {:else}
   <div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
     <div class="card bg-base-100 border-base-300 border shadow-sm">

@@ -17,21 +17,39 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
     );
 
   try {
-    const [invoices, settings, audit] = await Promise.all([
-      canViewInvoices
-        ? (backendGet("/api/v1/invoices", auth) as Promise<any[]>)
-        : Promise.resolve([] as any[]),
-      backendGet("/api/v1/settings", auth).catch(() => ({})) as Promise<
-        Record<string, unknown>
-      >,
-      canViewInvoices
-        ? (backendGet("/api/v1/reports/audit", auth).catch(() => []) as Promise<
-            any[]
-          >)
-        : Promise.resolve([] as any[]),
-    ]);
-    return { invoices, settings, audit };
+    const [invoices, settings, audit, profitLoss, stockValuation] =
+      await Promise.all([
+        canViewInvoices
+          ? (backendGet("/api/v1/invoices", auth) as Promise<any[]>)
+          : Promise.resolve([] as any[]),
+        backendGet("/api/v1/settings", auth).catch(() => ({})) as Promise<
+          Record<string, unknown>
+        >,
+        canViewInvoices
+          ? (backendGet("/api/v1/reports/audit", auth).catch(
+              () => [],
+            ) as Promise<any[]>)
+          : Promise.resolve([] as any[]),
+        canViewInvoices
+          ? (backendGet("/api/v1/reports/profit-loss", auth).catch(
+              () => null,
+            ) as Promise<any>)
+          : Promise.resolve(null),
+        canViewInvoices
+          ? (backendGet("/api/v1/reports/stock-valuation", auth).catch(
+              () => null,
+            ) as Promise<any>)
+          : Promise.resolve(null),
+      ]);
+    return { invoices, settings, audit, profitLoss, stockValuation };
   } catch (err) {
-    return { error: String(err), invoices: [], settings: {}, audit: [] };
+    return {
+      error: String(err),
+      invoices: [],
+      settings: {},
+      audit: [],
+      profitLoss: null,
+      stockValuation: null,
+    };
   }
 };

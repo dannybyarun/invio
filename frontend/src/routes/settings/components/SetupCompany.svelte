@@ -17,7 +17,15 @@
     </label>
     <label class="form-control">
       <div class="label"><span class="label-text">{t("Currency")}</span></div>
-      <input type="text" class="input input-bordered w-full" bind:value={settings.currency} oninput={(e) => (settings.currency = e.currentTarget.value.toUpperCase())} maxlength="3" disabled={!canUpdateSettings} placeholder="NPR" />
+      <input
+        type="text"
+        class="input input-bordered w-full"
+        bind:value={settings.currency}
+        oninput={(e) => (settings.currency = e.currentTarget.value.toUpperCase())}
+        maxlength="3"
+        disabled={!canUpdateSettings}
+        placeholder="NPR"
+      />
     </label>
   </div>
 
@@ -61,7 +69,15 @@
       <div class="label">
         <span class="label-text">{t("Country Code")}</span>
       </div>
-      <input type="text" class="input input-bordered w-full" bind:value={settings.companyCountryCode} oninput={(e) => (settings.companyCountryCode = e.currentTarget.value.toUpperCase())} maxlength="2" disabled={!canUpdateSettings} placeholder="NP" />
+      <input
+        type="text"
+        class="input input-bordered w-full"
+        bind:value={settings.companyCountryCode}
+        oninput={(e) => (settings.companyCountryCode = e.currentTarget.value.toUpperCase())}
+        maxlength="2"
+        disabled={!canUpdateSettings}
+        placeholder="NP"
+      />
     </label>
   </div>
 </div>

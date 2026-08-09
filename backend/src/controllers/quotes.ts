@@ -27,12 +27,14 @@ export function nextQuoteNumber(): string {
 }
 
 function mapRowToQuote(row: unknown[]): Quote {
+  const expiryDate = row[4] ? String(row[4]) : undefined;
   return {
     id: row[0] as string,
     quoteNumber: row[1] as string,
     customerId: row[2] as string,
     issueDate: String(row[3]),
-    expiryDate: row[4] ? String(row[4]) : undefined,
+    expiryDate,
+    isExpired: isQuoteExpired(expiryDate),
     currency: row[5] as string,
     status: row[6] as Quote["status"],
     subtotal: Number(row[7]) || 0,
@@ -47,6 +49,14 @@ function mapRowToQuote(row: unknown[]): Quote {
     createdAt: new Date(row[16] as string),
     updatedAt: new Date(row[17] as string),
   };
+}
+
+/** A quote has expired when its expiry date is before today and it is not yet converted. */
+function isQuoteExpired(expiryDate?: string): boolean {
+  if (!expiryDate) return false;
+  const exp = new Date(`${expiryDate}T23:59:59`);
+  if (Number.isNaN(exp.getTime())) return false;
+  return exp.getTime() < Date.now();
 }
 
 const toNullable = (v?: string): string | null => {
@@ -349,6 +359,77 @@ export const convertQuoteToInvoice = async (
   ]);
 
   return { quote: getQuoteById(id)!, invoiceId: invoice.id };
+};
+
+/**
+ * Duplicate a quote into a new draft quote (re-quote).
+ * New issue date and expiry (defaults to +30 days), fresh quote number,
+ * same customer, items and totals.
+ */
+export const duplicateQuote = (id: string): Quote => {
+  const existing = getQuoteById(id);
+  if (!existing) throw new Error("Quote not found");
+
+  const db = getDatabase();
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const expiry = new Date(now.getTime() + 30 * 86400000)
+    .toISOString()
+    .slice(0, 10);
+
+  const newId = generateUUID();
+  db.execute("BEGIN");
+  try {
+    db.query(
+      `INSERT INTO quotes (id, quote_number, customer_id, issue_date, expiry_date, currency, status,
+         subtotal, discount_amount, discount_percentage, tax_rate, tax_amount, total, payment_terms, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        newId,
+        nextQuoteNumber(),
+        existing.customerId,
+        today,
+        existing.expiryDate ? expiry : null,
+        existing.currency,
+        existing.subtotal,
+        existing.discountAmount,
+        existing.discountPercentage,
+        existing.taxRate,
+        existing.taxAmount,
+        existing.total,
+        toNullable(existing.paymentTerms),
+        toNullable(existing.notes),
+        now.toISOString(),
+        now.toISOString(),
+      ],
+    );
+    for (const it of existing.items || []) {
+      db.query(
+        `INSERT INTO quote_items (id, quote_id, product_id, description, quantity, unit, unit_price, line_total, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          generateUUID(),
+          newId,
+          it.productId ? String(it.productId) : null,
+          it.description,
+          it.quantity,
+          it.unit ? String(it.unit) : null,
+          it.unitPrice,
+          it.lineTotal,
+          it.sortOrder,
+        ],
+      );
+    }
+    db.execute("COMMIT");
+  } catch (e) {
+    try {
+      db.execute("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return getQuoteById(newId)!;
 };
 
 export const deleteQuote = (id: string): boolean => {

@@ -478,6 +478,7 @@ export interface Quote {
   customerId: string;
   issueDate: string;
   expiryDate?: string;
+  isExpired?: boolean;
   currency: string;
   status: QuoteStatus;
   subtotal: number;

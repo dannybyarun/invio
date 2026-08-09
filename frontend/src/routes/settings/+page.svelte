@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Save, CircleAlert, Building2, Palette, Sun, Languages, LayoutTemplate, CreditCard, Percent, Package, Hash, FileCodeCorner, Shield } from "lucide-svelte";
+  import { Save, CircleAlert, Building2, Palette, Sun, Languages, LayoutTemplate, CreditCard, Percent, Package, Hash, FileCodeCorner, Shield, Database } from "lucide-svelte";
   import { getContext } from "svelte";
   import { invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
@@ -9,6 +9,7 @@
   import ProductOptionsManager from "./components/ProductOptionsManager.svelte";
   import TemplateOptionsManager from "./components/TemplateOptionsManager.svelte";
   import BrandingManager from "./components/BrandingManager.svelte";
+  import BackupManager from "./components/BackupManager.svelte";
   import { hasPermission } from "$lib/types";
 
   let { data } = $props();
@@ -234,6 +235,7 @@
     { id: "products", label: "Products", icon: Package },
     { id: "numbering", label: "Numbering", icon: Hash },
     { id: "xml", label: "XML Export", icon: FileCodeCorner },
+    { id: "backup", label: "Backup", icon: Database },
     { id: "security", label: "Security", icon: Shield, condition: () => !demoMode },
   ];
 
@@ -331,6 +333,8 @@
       <div class="bg-base-100 rounded-box border-base-200 max-w-4xl border p-6">
         <TemplateOptionsManager templates={data.templates} />
       </div>
+    {:else if section === "backup"}
+      <BackupManager />
     {:else if section === "security"}
       <div class="bg-base-100 rounded-box border-base-200 max-w-4xl space-y-6 border p-6">
         <div class="space-y-2">

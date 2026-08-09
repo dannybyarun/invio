@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import { FileText, Plus } from "lucide-svelte";
+  import { CopyPlus, FileText, Plus, TriangleAlert } from "lucide-svelte";
+  import { goto } from "$app/navigation";
   import { hasPermission } from "$lib/types";
   import { numberFormatLocale } from "$lib/utils/dates";
 
@@ -36,6 +37,17 @@
     };
     return map[s] || "badge-ghost";
   }
+
+  async function reQuote(q: any) {
+    try {
+      const res = await fetch(`/api/v1/quotes/${q.id}/duplicate`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || t("Failed to re-quote"));
+      goto(`/quotes/${body.id}`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  }
 </script>
 
 <div class="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
@@ -59,6 +71,7 @@
         <th>{t("Expiry")}</th>
         <th>{t("Status")}</th>
         <th class="text-right">{t("Total")}</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -68,12 +81,25 @@
           <td class="opacity-70">{q.customer?.name || "—"}</td>
           <td class="opacity-70">{q.issueDate}</td>
           <td class="opacity-70">{q.expiryDate || "—"}</td>
-          <td><span class="badge {statusBadge(q.status)}">{t(q.status[0].toUpperCase() + q.status.slice(1))}</span></td>
+          <td class="space-x-1">
+            <span class="badge {statusBadge(q.status)}">{t(q.status[0].toUpperCase() + q.status.slice(1))}</span>
+            {#if q.isExpired && q.status !== "converted"}
+              <span class="badge badge-error badge-outline gap-1"><TriangleAlert size={11} />{t("Expired")}</span>
+            {/if}
+          </td>
           <td class="text-right font-medium">{fmtMoney(q.currency, q.total)}</td>
+          <td class="text-right">
+            {#if canCreate && q.status !== "converted"}
+              <button type="button" class="btn btn-ghost btn-xs" title={t("Create a new quote from this one")} onclick={() => reQuote(q)}>
+                <CopyPlus size={14} />
+                {t("Re-quote")}
+              </button>
+            {/if}
+          </td>
         </tr>
       {/each}
       {#if quotes.length === 0}
-        <tr><td colspan="6" class="py-10 text-center text-sm opacity-70"><span class="inline-flex items-center gap-2"><FileText size={16} />{t("No quotes yet")}.</span></td></tr>
+        <tr><td colspan="7" class="py-10 text-center text-sm opacity-70"><span class="inline-flex items-center gap-2"><FileText size={16} />{t("No quotes yet")}.</span></td></tr>
       {/if}
     </tbody>
   </table>
@@ -90,6 +116,9 @@
           </div>
           <div class="text-right">
             <span class="badge {statusBadge(q.status)}">{t(q.status[0].toUpperCase() + q.status.slice(1))}</span>
+            {#if q.isExpired && q.status !== "converted"}
+              <span class="badge badge-error badge-outline gap-1"><TriangleAlert size={11} />{t("Expired")}</span>
+            {/if}
             <div class="mt-1 font-semibold">{fmtMoney(q.currency, q.total)}</div>
           </div>
         </div>
