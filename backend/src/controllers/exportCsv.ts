@@ -7,7 +7,10 @@ import { getCustomers } from "./customers.ts";
 import { getProducts } from "./products.ts";
 
 const esc = (v: unknown): string => {
-  const s = v == null ? "" : String(v);
+  let s = v == null ? "" : String(v);
+  // CSV formula injection: prefix cells that start with =, +, -, @, tab or CR
+  // with a single quote so spreadsheet apps treat them as text, not formulas.
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 

@@ -161,7 +161,10 @@ export async function addManualPayment(
   return await getInvoiceById(invoiceId);
 }
 
-export function deleteManualPayment(paymentId: string): boolean {
+export function deleteManualPayment(
+  paymentId: string,
+  expectedInvoiceId?: string,
+): boolean {
   const db = getDatabase();
   const rows = db.query(
     "SELECT invoice_id, amount FROM invoice_payments WHERE id = ?",
@@ -169,6 +172,10 @@ export function deleteManualPayment(paymentId: string): boolean {
   ) as unknown[][];
   if (rows.length === 0) throw new Error("Payment not found");
   const invoiceId = String(rows[0][0]);
+  // Ownership check: the payment must belong to the invoice in the URL.
+  if (expectedInvoiceId && invoiceId !== expectedInvoiceId) {
+    throw new Error("Payment does not belong to this invoice");
+  }
   db.query("DELETE FROM invoice_payments WHERE id = ?", [paymentId]);
   // Re-derive status: revert 'paid' to 'complete' if no longer fully paid.
   const invoice = getInvoiceById(invoiceId);
@@ -275,8 +282,7 @@ export async function sendPaymentReminder(
       reason: "Email is not configured (set SMTP_HOST / EMAIL_FROM_ADDRESS)",
     };
   }
-
-  const companyName = getSetting("companyName") || "Your Company";
+  const companyName = String(getSetting("companyName") || "Your Company");
   const link = `${
     publicBaseUrl.replace(/\/+$/, "")
   }/public/invoices/${invoice.shareToken}`;
@@ -285,19 +291,39 @@ export async function sendPaymentReminder(
     currency: invoice.currency,
   }).format(invoice.amountDue ?? invoice.total);
 
+  // Escape user-controlled fields before embedding them in the HTML email
+  // (prevents HTML injection / phishing via crafted customer names).
+  const escHtml = (s: string): string =>
+    String(s).replace(
+      /[&<>"']/g,
+      (ch) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[ch] ?? ch,
+    );
+  const customerName = escHtml(invoice.customer.name);
+  const companySafe = escHtml(companyName);
+  const dueLabel = invoice.dueDate
+    ? new Date(invoice.dueDate).toLocaleDateString()
+    : "immediately";
+
   await sendEmail({
     to: [invoice.customer.email],
     subject:
       `Payment reminder for ${invoice.invoiceNumber} from ${companyName}`,
-    htmlBody: `<p>Dear ${invoice.customer.name},</p>` +
-      `<p>This is a reminder that invoice <strong>${invoice.invoiceNumber}</strong> ` +
-      `for <strong>${amount}</strong> (due ${
-        invoice.dueDate
-          ? new Date(invoice.dueDate).toLocaleDateString()
-          : "immediately"
+    htmlBody: `<p>Dear ${customerName},</p>` +
+      `<p>This is a reminder that invoice <strong>${
+        escHtml(invoice.invoiceNumber)
+      }</strong> ` +
+      `for <strong>${escHtml(amount)}</strong> (due ${
+        escHtml(dueLabel)
       }) is still outstanding.</p>` +
       `<p>You can view and pay your invoice here: <a href="${link}">${link}</a></p>` +
-      `<p>Thank you for your business.</p><p>${companyName}</p>`,
+      `<p>Thank you for your business.</p><p>${companySafe}</p>`,
     textBody: `Dear ${invoice.customer.name},\n\n` +
       `This is a reminder that invoice ${invoice.invoiceNumber} for ${amount} is still outstanding.\n` +
       `View and pay: ${link}\n\nThank you,\n${companyName}`,

@@ -145,7 +145,7 @@ import { generateFonepayQr } from "../utils/fonepay.ts";
 
 import { resetDatabaseFromDemo } from "../database/init.ts";
 import { getNextInvoiceNumber } from "../database/init.ts";
-import { isDemoMode } from "../utils/env.ts";
+import { getEnv, isDemoMode } from "../utils/env.ts";
 import {
   normalizeStoredLogoReference,
   saveDataUrlLogo,
@@ -3119,7 +3119,7 @@ adminRoutes.delete(
   requirePermission("invoices", "update"),
   (c) => {
     try {
-      deleteManualPayment(c.req.param("paymentId"));
+      deleteManualPayment(c.req.param("paymentId"), c.req.param("id"));
       return c.json({ success: true });
     } catch (e) {
       return c.json({ error: String(e) }, 400);
@@ -3140,9 +3140,10 @@ adminRoutes.post(
   requirePermission("invoices", "update"),
   async (c) => {
     try {
-      const origin = c.req.header("origin") || c.req.url;
-      const base = new URL(origin).origin || "http://localhost:3000";
-      const result = await sendPaymentReminder(c.req.param("id"), base);
+      const result = await sendPaymentReminder(
+        c.req.param("id"),
+        trustedBaseUrl(c),
+      );
       return c.json(result);
     } catch (e) {
       return c.json({ error: String(e) }, 400);
@@ -3159,9 +3160,7 @@ adminRoutes.post(
       if (ids.length === 0) {
         return c.json({ error: "No invoices selected" }, 400);
       }
-      const origin = c.req.header("origin") || c.req.url;
-      const base = new URL(origin).origin || "http://localhost:3000";
-      const result = await bulkSendReminders(ids, base);
+      const result = await bulkSendReminders(ids, trustedBaseUrl(c));
       return c.json(result);
     } catch (e) {
       return c.json({ error: String(e) }, 400);
@@ -3257,5 +3256,24 @@ adminRoutes.post(
     }
   },
 );
+
+/**
+ * Prefer an explicitly configured APP_URL (trusted) for building public links
+ * in emails; only fall back to the request Origin header (which clients can
+ * spoof) when no APP_URL is set.
+ */
+function trustedBaseUrl(c: unknown): string {
+  const envBase = (getEnv("APP_URL") || "").trim().replace(/\/+$/, "");
+  if (envBase) return envBase;
+  const ctx = c as {
+    req: { header: (name: string) => string | undefined; url: string };
+  };
+  const origin = ctx.req.header("origin") || ctx.req.url;
+  try {
+    return new URL(origin).origin || "http://localhost:3000";
+  } catch {
+    return "http://localhost:3000";
+  }
+}
 
 export { adminRoutes };
