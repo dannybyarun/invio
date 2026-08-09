@@ -1,10 +1,14 @@
 <script lang="ts">
   import { getContext } from "svelte";
+  import { page } from "$app/state";
   import { PackagePlus } from "lucide-svelte";
   import { enhance } from "$app/forms";
 
   let { data, form } = $props();
   let t = getContext("i18n") as (key: string) => string;
+
+  // Pre-fill the barcode when arriving from a scan on the Products page.
+  let scannedBarcode = $state((page.url.searchParams.get("barcode") || "").trim());
 </script>
 
 <form method="post" use:enhance>
@@ -92,7 +96,12 @@
         <label class="label pb-1" for="barcode">
           <span class="label-text">{t("Barcode")}</span>
         </label>
-        <input type="text" id="barcode" name="barcode" class="input input-sm input-bordered w-full" inputmode="numeric" autocomplete="off" />
+        <input type="text" id="barcode" name="barcode" class="input input-sm input-bordered w-full" value={scannedBarcode} inputmode="numeric" autocomplete="off" />
+        {#if scannedBarcode}
+          <div class="pt-1">
+            <span class="label-text-alt text-primary">{t("Barcode filled from scan — add the rest and save.")}</span>
+          </div>
+        {/if}
       </div>
     </div>
 

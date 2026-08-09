@@ -469,5 +469,6 @@
   "Expired": "म्याद सकिएको",
   "Re-quote": "पुनः कोट",
   "Create a new quote from this one": "यसबाट नयाँ कोट सिर्जना गर्नुहोस्",
-  "Failed to re-quote": "पुनः कोट असफल भयो"
+  "Failed to re-quote": "पुनः कोट असफल भयो",
+  "Barcode filled from scan — add the rest and save.": "बारकोड स्क्यानबाट भरिएको छ — बाँकी थपेर सेभ गर्नुहोस्।"
 }

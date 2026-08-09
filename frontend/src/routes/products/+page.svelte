@@ -1,8 +1,10 @@
 <script lang="ts">
   import { Download, PackagePlus, TriangleAlert } from "lucide-svelte";
   import { getContext } from "svelte";
+  import { goto } from "$app/navigation";
   import { numberFormatLocale } from "$lib/utils/dates";
   import { hasPermission } from "$lib/types";
+  import ScanBarcodeButton from "$lib/components/ScanBarcodeButton.svelte";
 
   let { data } = $props();
   let t = getContext("i18n") as (key: string) => string;
@@ -36,6 +38,17 @@
   function isLow(p: any) {
     return (Number(p.reorderLevel) || 0) > 0 && (Number(p.quantityOnHand) || 0) <= Number(p.reorderLevel);
   }
+
+  async function handleScan(code: string) {
+    const normalized = code.trim();
+    if (!normalized) return;
+    const existing = products.find((p: any) => String(p.barcode || "").toLowerCase() === normalized.toLowerCase() || String(p.sku || "").toLowerCase() === normalized.toLowerCase());
+    if (existing) {
+      goto(`/products/${existing.id}`);
+    } else {
+      goto(`/products/new?barcode=${encodeURIComponent(normalized)}`);
+    }
+  }
 </script>
 
 <div class="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
@@ -43,6 +56,9 @@
   <div class="flex flex-wrap items-center gap-2">
     {#if lowStockCount > 0}
       <span class="badge badge-warning gap-1"><TriangleAlert size={13} /> {lowStockCount} {t("low stock")}</span>
+    {/if}
+    {#if canCreate}
+      <ScanBarcodeButton onDetected={handleScan} label={t("Scan barcode")} />
     {/if}
     {#if canExport}
       <a href="/api/v1/export/products.csv" class="btn btn-sm btn-outline"><Download size={15} /> CSV</a>
