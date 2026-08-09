@@ -53,7 +53,10 @@
           percent: parseFloat(formData.percent),
         }),
       });
-      if (!res.ok) throw new Error("Failed to save tax definition");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || "Failed to save tax definition");
+      }
       handleCancel();
       invalidateAll();
     } catch (err) {
@@ -69,7 +72,10 @@
       const res = await fetch(`/api/v1/tax-definitions/${tax.id}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error("Failed to delete tax definition");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || "Failed to delete tax definition");
+      }
       invalidateAll();
     } catch (err) {
       alert(err);

@@ -183,6 +183,38 @@ export function deleteTaxDefinition(id: string): { id: string } {
   const db = getDatabase();
   const existing = getTaxDefinitionById(id);
   if (!existing) throw new Error("NOT_FOUND");
+
+  // A tax definition still referenced by products or saved invoice tax rows
+  // cannot be hard-deleted: those tables keep a foreign key to
+  // tax_definitions(id) with no ON DELETE action, so a raw delete would fail
+  // with an opaque "FOREIGN KEY constraint failed" error. Report usage up
+  // front so the operator can detach the tax first.
+  const count = (sql: string): number => {
+    const rows = db.query(sql, [id]) as unknown[][];
+    return Number(rows[0]?.[0] ?? 0);
+  };
+  const productCount = count(
+    "SELECT COUNT(*) FROM products WHERE tax_definition_id = ?",
+  );
+  const invoiceCount = count(
+    "SELECT COUNT(*) FROM invoice_taxes WHERE tax_definition_id = ?",
+  );
+  const itemCount = count(
+    "SELECT COUNT(*) FROM invoice_item_taxes WHERE tax_definition_id = ?",
+  );
+
+  if (productCount > 0 || invoiceCount > 0 || itemCount > 0) {
+    const usage: string[] = [];
+    if (productCount > 0) usage.push(`${productCount} product(s)`);
+    if (invoiceCount > 0) usage.push(`${invoiceCount} invoice(s)`);
+    if (itemCount > 0) usage.push(`${itemCount} invoice line item(s)`);
+    throw new Error(
+      `Cannot delete tax definition "${existing.code}": it is still used by ${
+        usage.join(", ")
+      }. Remove it from those records first.`,
+    );
+  }
+
   db.query("DELETE FROM tax_definitions WHERE id = ?", [id]);
   return { id };
 }
