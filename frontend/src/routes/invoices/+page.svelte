@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CheckSquare, ChevronLeft, ChevronRight, Eye, Pencil, Search, Send, SquarePen, Trash2 } from "lucide-svelte";
+  import { CheckSquare, ChevronLeft, ChevronRight, Download, Eye, Mail, Pencil, Search, Send, SquarePen, Trash2 } from "lucide-svelte";
   import { getContext } from "svelte";
   import { page } from "$app/state";
   import { invalidateAll } from "$app/navigation";
@@ -109,7 +109,44 @@
 
   let canBulkUpdate = $derived(Boolean(canUpdate));
   let canBulkDelete = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "invoices" && p.action === "delete"));
-  let canSelect = $derived(canBulkUpdate || canBulkDelete);
+  let canBulkExport = $derived(user?.isAdmin || user?.permissions?.some((p) => p.resource === "invoices" && p.action === "export"));
+  let canSelect = $derived(canBulkUpdate || canBulkDelete || canBulkExport);
+
+  function bulkExportCsv() {
+    if (selectedInvoices.length === 0) return;
+    const ids = selectedInvoices.map((inv) => String(inv.id)).join(",");
+    window.location.href = `/api/v1/export/invoices.csv?ids=${encodeURIComponent(ids)}`;
+  }
+
+  async function bulkSendReminders() {
+    if (bulkBusy || selectedInvoices.length === 0) return;
+    const eligible = selectedInvoices.filter((inv) => inv.status === "sent" || inv.status === "overdue");
+    if (eligible.length === 0) {
+      bulkError = t("Only sent or overdue invoices can be reminded.");
+      return;
+    }
+    if (!confirm(t("Send payment reminders for the selected invoices?"))) return;
+    bulkBusy = true;
+    bulkMessage = "";
+    bulkError = "";
+    try {
+      const response = await fetch("/api/v1/invoices/bulk-remind", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: eligible.map((inv) => String(inv.id)) }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `${response.status} ${response.statusText}`);
+      bulkMessage = `${t("Reminders sent")}: ${body.sent ?? 0}${(body.skipped || []).length > 0 ? ` (${t("skipped")}: ${body.skipped.length})` : ""}`;
+      if ((body.skipped || []).length > 0) {
+        bulkError = t("Some invoices were skipped (no email or not configured).");
+      }
+    } catch (e: any) {
+      bulkError = e.message || String(e);
+    } finally {
+      bulkBusy = false;
+    }
+  }
 
   function toDateMs(v: unknown) {
     return new Date((v as string) || 0).getTime();
@@ -462,6 +499,16 @@
         {#if canBulkDelete}
           <button type="button" class="btn btn-sm btn-error btn-outline" onclick={() => runBulkAction("delete")} disabled={bulkBusy}>
             <Trash2 size={15} />{t("Delete drafts/voided")}
+          </button>
+        {/if}
+        {#if canBulkExport}
+          <button type="button" class="btn btn-sm btn-outline" onclick={bulkExportCsv} disabled={bulkBusy}>
+            <Download size={15} />CSV
+          </button>
+        {/if}
+        {#if canBulkUpdate}
+          <button type="button" class="btn btn-sm btn-outline" onclick={bulkSendReminders} disabled={bulkBusy}>
+            {#if bulkBusy}<span class="loading loading-spinner loading-xs"></span>{/if}<Mail size={15} />{t("Send Reminders")}
           </button>
         {/if}
       </div>

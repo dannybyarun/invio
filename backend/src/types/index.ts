@@ -27,6 +27,9 @@ export interface Product {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+  costPrice?: number; // purchase cost per unit (for profit tracking)
+  quantityOnHand?: number; // current stock (kept in sync with stock_movements)
+  reorderLevel?: number; // low-stock threshold
 }
 
 export interface Invoice {
@@ -60,6 +63,13 @@ export interface Invoice {
   fonepayQrAmount?: number;
   fonepayTransactionId?: string;
   fonepayVerifiedAt?: Date;
+
+  // Multi-currency & derived payment state
+  exchangeRate?: number; // 1 invoice currency = N base currency
+  amountPaid?: number; // manual payments + verified gateway payments
+  amountDue?: number; // total - amountPaid - credit notes applied
+  creditApplied?: number; // sum of issued credit notes tied to this invoice
+  sourceQuoteId?: string;
 
   // Locale overrides
   locale?: string;
@@ -176,6 +186,12 @@ export const RESOURCES = [
   "settings",
   "tax_definitions",
   "users",
+  "suppliers",
+  "expenses",
+  "purchase_orders",
+  "quotes",
+  "credit_notes",
+  "recurring_invoices",
 ] as const;
 
 export type Resource = (typeof RESOURCES)[number];
@@ -202,6 +218,12 @@ export const RESOURCE_ACTIONS: Record<Resource, readonly Action[]> = {
   settings: ["read", "update"],
   tax_definitions: ["read", "create", "update", "delete"],
   users: ["read", "create", "update", "delete"],
+  suppliers: ["read", "create", "update", "delete"],
+  expenses: ["read", "create", "update", "delete"],
+  purchase_orders: ["read", "create", "update", "delete"],
+  quotes: ["read", "create", "update", "delete"],
+  credit_notes: ["read", "create", "update", "delete"],
+  recurring_invoices: ["read", "create", "update", "delete"],
 };
 
 export interface Permission {
@@ -317,6 +339,331 @@ export interface CreateProductRequest {
   unit?: string;
   category?: string;
   taxDefinitionId?: string;
+  costPrice?: number;
+  quantityOnHand?: number;
+  reorderLevel?: number;
+}
+
+// =============================================
+// Inventory / stock types
+// =============================================
+
+export type StockReason =
+  | "sale"
+  | "void"
+  | "purchase"
+  | "return"
+  | "adjustment"
+  | "opening";
+
+export interface StockMovement {
+  id: string;
+  productId: string;
+  quantity: number; // signed
+  reason: StockReason;
+  refType?: string; // invoice | credit_note | purchase_order | product
+  refId?: string;
+  note?: string;
+  createdAt: Date;
+}
+
+// =============================================
+// Suppliers / expenses / purchase orders
+// =============================================
+
+export interface Supplier {
+  id: string;
+  name: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxId?: string;
+  notes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateSupplierRequest {
+  name: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxId?: string;
+  notes?: string;
+}
+
+export interface Expense {
+  id: string;
+  expenseDate: string;
+  supplierId?: string;
+  category?: string;
+  description?: string;
+  amount: number;
+  taxAmount: number;
+  paymentMethod?: string;
+  reference?: string;
+  notes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateExpenseRequest {
+  expenseDate: string;
+  supplierId?: string;
+  category?: string;
+  description?: string;
+  amount: number;
+  taxAmount?: number;
+  paymentMethod?: string;
+  reference?: string;
+  notes?: string;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  poNumber: string;
+  supplierId?: string;
+  orderDate: string;
+  status: "draft" | "ordered" | "received" | "voided";
+  notes?: string;
+  subtotal: number;
+  taxAmount: number;
+  total: number;
+  receivedAt?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  items?: PurchaseOrderItem[];
+  supplierName?: string;
+}
+
+export interface PurchaseOrderItem {
+  id: string;
+  purchaseOrderId: string;
+  productId?: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+export interface CreatePurchaseOrderRequest {
+  supplierId?: string;
+  orderDate: string;
+  notes?: string;
+  taxRate?: number;
+  items: Array<{
+    productId?: string;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
+}
+
+// =============================================
+// Quotes / estimates
+// =============================================
+
+export type QuoteStatus =
+  | "draft"
+  | "sent"
+  | "accepted"
+  | "declined"
+  | "converted";
+
+export interface Quote {
+  id: string;
+  quoteNumber: string;
+  customerId: string;
+  issueDate: string;
+  expiryDate?: string;
+  currency: string;
+  status: QuoteStatus;
+  subtotal: number;
+  discountAmount: number;
+  discountPercentage: number;
+  taxRate: number;
+  taxAmount: number;
+  total: number;
+  paymentTerms?: string;
+  notes?: string;
+  convertedInvoiceId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  customer?: Customer;
+  items?: QuoteItem[];
+}
+
+export interface QuoteItem {
+  id: string;
+  quoteId: string;
+  productId?: string;
+  description: string;
+  quantity: number;
+  unit?: string;
+  unitPrice: number;
+  lineTotal: number;
+  sortOrder: number;
+}
+
+export interface CreateQuoteRequest {
+  customerId: string;
+  issueDate?: string;
+  expiryDate?: string;
+  currency?: string;
+  discountAmount?: number;
+  discountPercentage?: number;
+  taxRate?: number;
+  paymentTerms?: string;
+  notes?: string;
+  items: Array<{
+    productId?: string;
+    description: string;
+    quantity: number;
+    unit?: string;
+    unitPrice: number;
+  }>;
+}
+
+// =============================================
+// Credit notes / refunds
+// =============================================
+
+export interface CreditNote {
+  id: string;
+  creditNumber: string;
+  invoiceId?: string;
+  customerId: string;
+  issueDate: string;
+  reason?: string;
+  subtotal: number;
+  taxRate: number;
+  taxAmount: number;
+  total: number;
+  status: "issued" | "voided";
+  createdAt: Date;
+  updatedAt: Date;
+  customer?: Customer;
+  invoiceNumber?: string;
+  items?: CreditNoteItem[];
+}
+
+export interface CreditNoteItem {
+  id: string;
+  creditNoteId: string;
+  productId?: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  sortOrder: number;
+}
+
+export interface CreateCreditNoteRequest {
+  invoiceId?: string;
+  customerId: string;
+  issueDate?: string;
+  reason?: string;
+  taxRate?: number;
+  items: Array<{
+    productId?: string;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
+}
+
+// =============================================
+// Recurring invoices
+// =============================================
+
+export interface RecurringInvoice {
+  id: string;
+  name: string;
+  customerId: string;
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  intervalCount: number;
+  nextRunDate: string;
+  lastRunDate?: string;
+  endDate?: string;
+  defaultStatus: "draft" | "sent";
+  isActive: boolean;
+  templateJson: string; // invoice payload template
+  createdAt: Date;
+  updatedAt: Date;
+  customerName?: string;
+}
+
+export interface CreateRecurringInvoiceRequest {
+  name: string;
+  customerId: string;
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  intervalCount?: number;
+  nextRunDate?: string;
+  endDate?: string;
+  defaultStatus?: "draft" | "sent";
+  isActive?: boolean;
+  currency?: string;
+  discountPercentage?: number;
+  discountAmount?: number;
+  taxRate?: number;
+  paymentTerms?: string;
+  notes?: string;
+  items: Array<{
+    productId?: string;
+    description: string;
+    quantity: number;
+    unit?: string;
+    unitPrice: number;
+  }>;
+}
+
+// =============================================
+// Payments / statements / reminders
+// =============================================
+
+export interface InvoicePayment {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  method?: string;
+  reference?: string;
+  note?: string;
+  paidAt: Date;
+  createdAt: Date;
+  source: "manual" | "gateway";
+  provider?: string;
+}
+
+export interface AddPaymentRequest {
+  amount: number;
+  method?: string;
+  reference?: string;
+  note?: string;
+  paidAt?: string;
+}
+
+export interface StatementEntry {
+  invoiceId: string;
+  invoiceNumber: string;
+  issueDate: string;
+  dueDate?: string;
+  status: string;
+  total: number;
+  paid: number;
+  credited: number;
+  balance: number; // running balance
+}
+
+export interface CustomerStatement {
+  customerId: string;
+  customerName: string;
+  entries: StatementEntry[];
+  totalBilled: number;
+  totalPaid: number;
+  totalCredited: number;
+  outstanding: number;
 }
 
 export interface StatusHistoryEntry {
@@ -345,6 +692,7 @@ export interface InvoiceWithDetails extends Invoice {
   taxes?: InvoiceTax[];
   statusHistory?: StatusHistoryEntry[];
   paymentTransactions?: PaymentTransaction[];
+  payments?: Array<InvoicePayment | PaymentTransaction>;
 }
 
 // Template rendering context

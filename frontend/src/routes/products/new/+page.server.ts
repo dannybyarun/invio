@@ -53,6 +53,11 @@ export const actions: Actions = {
     const unit = String(form.get("unit") || "");
     const category = String(form.get("category") || "");
     const taxDefinitionId = String(form.get("taxDefinitionId") || "");
+    const costPrice = parseFloat(String(form.get("costPrice") || "0"));
+    const quantityOnHand = parseFloat(
+      String(form.get("quantityOnHand") || "0"),
+    );
+    const reorderLevel = parseFloat(String(form.get("reorderLevel") || "0"));
 
     if (!name) {
       return fail(400, { error: "Name is required" });
@@ -69,6 +74,9 @@ export const actions: Actions = {
         unit: unit || undefined,
         category: category || undefined,
         taxDefinitionId: taxDefinitionId || undefined,
+        costPrice: Number.isFinite(costPrice) ? costPrice : 0,
+        quantityOnHand: Number.isFinite(quantityOnHand) ? quantityOnHand : 0,
+        reorderLevel: Number.isFinite(reorderLevel) ? reorderLevel : 0,
       });
     } catch (e: any) {
       if (e && typeof e === "object" && "status" in e && "location" in e)

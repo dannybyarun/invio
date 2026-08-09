@@ -1,7 +1,25 @@
 <script lang="ts">
   import { page } from "$app/state";
   import "@fontsource-variable/inter/wght.css";
-  import { BarChart3, Barcode, CreditCard, LayoutDashboard, LogOut, Ellipsis, Package, ReceiptText, Settings, UserCog, Users } from "lucide-svelte";
+  import {
+    BarChart3,
+    Barcode,
+    CreditCard,
+    LayoutDashboard,
+    LogOut,
+    Ellipsis,
+    Package,
+    ReceiptText,
+    Settings,
+    UserCog,
+    Users,
+    Truck,
+    Wallet,
+    ShoppingCart,
+    FileText,
+    Undo2,
+    RefreshCcw,
+  } from "lucide-svelte";
   import Breadcrumbs from "$lib/components/Breadcrumbs.svelte";
   import "./layout.css";
   import DemoAlert from "$lib/components/DemoAlert.svelte";
@@ -33,6 +51,12 @@
   let canViewSettings = $derived(hasPermission("settings", "read"));
   let canViewFonepay = $derived(!!authUser?.isAdmin);
   let canViewUsers = $derived(hasPermission("users", "read"));
+  let canViewSuppliers = $derived(hasPermission("suppliers", "read"));
+  let canViewExpenses = $derived(hasPermission("expenses", "read"));
+  let canViewPurchaseOrders = $derived(hasPermission("purchase_orders", "read"));
+  let canViewQuotes = $derived(hasPermission("quotes", "read"));
+  let canViewCreditNotes = $derived(hasPermission("credit_notes", "read"));
+  let canViewRecurring = $derived(hasPermission("recurring_invoices", "read"));
   let authed = $derived(!!authUser);
   let wide = $derived(page.data.wide ?? false);
   let isPublic = $derived(page.url.pathname.startsWith("/public"));
@@ -125,6 +149,54 @@
                         </a>
                       </li>
                     {/if}
+                    {#if canViewQuotes}
+                      <li>
+                        <a href="/quotes">
+                          <FileText size={16} />
+                          {t("Quotes")}
+                        </a>
+                      </li>
+                    {/if}
+                    {#if canViewPurchaseOrders}
+                      <li>
+                        <a href="/purchase-orders">
+                          <ShoppingCart size={16} />
+                          {t("Purchase Orders")}
+                        </a>
+                      </li>
+                    {/if}
+                    {#if canViewSuppliers}
+                      <li>
+                        <a href="/suppliers">
+                          <Truck size={16} />
+                          {t("Suppliers")}
+                        </a>
+                      </li>
+                    {/if}
+                    {#if canViewExpenses}
+                      <li>
+                        <a href="/expenses">
+                          <Wallet size={16} />
+                          {t("Expenses")}
+                        </a>
+                      </li>
+                    {/if}
+                    {#if canViewCreditNotes}
+                      <li>
+                        <a href="/credit-notes">
+                          <Undo2 size={16} />
+                          {t("Credit Notes")}
+                        </a>
+                      </li>
+                    {/if}
+                    {#if canViewRecurring}
+                      <li>
+                        <a href="/recurring">
+                          <RefreshCcw size={16} />
+                          {t("Recurring")}
+                        </a>
+                      </li>
+                    {/if}
                     {#if canViewSettings}
                       <li>
                         <a href="/settings">
@@ -209,6 +281,54 @@
                     <a href="/customers">
                       <Users size={16} />
                       {t("Customers")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewQuotes}
+                  <li>
+                    <a href="/quotes">
+                      <FileText size={16} />
+                      {t("Quotes")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewPurchaseOrders}
+                  <li>
+                    <a href="/purchase-orders">
+                      <ShoppingCart size={16} />
+                      {t("Purchase Orders")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewSuppliers}
+                  <li>
+                    <a href="/suppliers">
+                      <Truck size={16} />
+                      {t("Suppliers")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewExpenses}
+                  <li>
+                    <a href="/expenses">
+                      <Wallet size={16} />
+                      {t("Expenses")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewCreditNotes}
+                  <li>
+                    <a href="/credit-notes">
+                      <Undo2 size={16} />
+                      {t("Credit Notes")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewRecurring}
+                  <li>
+                    <a href="/recurring">
+                      <RefreshCcw size={16} />
+                      {t("Recurring")}
                     </a>
                   </li>
                 {/if}

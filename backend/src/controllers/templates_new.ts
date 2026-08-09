@@ -25,6 +25,7 @@ export const createTemplate = (data: Partial<Template>) => {
     name: data.name!,
     html: data.html!,
     isDefault: data.isDefault || false,
+    templateType: "builtin",
     createdAt: new Date(),
   };
 

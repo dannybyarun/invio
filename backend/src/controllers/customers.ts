@@ -176,8 +176,9 @@ export const updateCustomer = (
 
   const next = {
     name: data.name ?? existing.name,
-    contactName:
-      data.contactName === undefined ? existing.contactName : undefined,
+    contactName: data.contactName === undefined
+      ? existing.contactName
+      : undefined,
     email: data.email === undefined ? existing.email : undefined,
     phone: data.phone === undefined ? existing.phone : undefined,
     address: data.address === undefined ? existing.address : undefined,
@@ -185,38 +186,30 @@ export const updateCustomer = (
   } as Partial<Customer>;
 
   // If provided, coerce empty to NULL
-  const contactName =
-    data.contactName !== undefined
-      ? toNullable(data.contactName)
-      : (existing.contactName ?? null);
-  const email =
-    data.email !== undefined
-      ? toNullable(data.email)
-      : (existing.email ?? null);
-  const phone =
-    data.phone !== undefined
-      ? toNullable(data.phone)
-      : (existing.phone ?? null);
-  const address =
-    data.address !== undefined
-      ? toNullable(data.address)
-      : (existing.address ?? null);
-  const countryCode =
-    data.countryCode !== undefined
-      ? toNullable(data.countryCode)
-      : (existing.countryCode ?? null);
-  const taxId =
-    data.taxId !== undefined
-      ? toNullable(data.taxId)
-      : (existing.taxId ?? null);
-  const city =
-    (data as { city?: string }).city !== undefined
-      ? toNullable((data as { city?: string }).city)
-      : (existing.city ?? null);
-  const postal =
-    (data as { postalCode?: string }).postalCode !== undefined
-      ? toNullable((data as { postalCode?: string }).postalCode)
-      : (existing.postalCode ?? null);
+  const contactName = data.contactName !== undefined
+    ? toNullable(data.contactName)
+    : (existing.contactName ?? null);
+  const email = data.email !== undefined
+    ? toNullable(data.email)
+    : (existing.email ?? null);
+  const phone = data.phone !== undefined
+    ? toNullable(data.phone)
+    : (existing.phone ?? null);
+  const address = data.address !== undefined
+    ? toNullable(data.address)
+    : (existing.address ?? null);
+  const countryCode = data.countryCode !== undefined
+    ? toNullable(data.countryCode)
+    : (existing.countryCode ?? null);
+  const taxId = data.taxId !== undefined
+    ? toNullable(data.taxId)
+    : (existing.taxId ?? null);
+  const city = (data as { city?: string }).city !== undefined
+    ? toNullable((data as { city?: string }).city)
+    : (existing.city ?? null);
+  const postal = (data as { postalCode?: string }).postalCode !== undefined
+    ? toNullable((data as { postalCode?: string }).postalCode)
+    : (existing.postalCode ?? null);
 
   try {
     db.query(

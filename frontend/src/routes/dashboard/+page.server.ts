@@ -35,7 +35,7 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
     );
 
   try {
-    const [invoices, customers, settings] = await Promise.all([
+    const [invoices, customers, settings, kpis] = await Promise.all([
       canViewInvoices
         ? (backendGet("/api/v1/invoices", auth) as Promise<Invoice[]>)
         : Promise.resolve([] as Invoice[]),
@@ -45,6 +45,9 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
       backendGet("/api/v1/settings", auth).catch(() => ({})) as Promise<
         Record<string, unknown>
       >,
+      canViewInvoices
+        ? backendGet("/api/v1/dashboard/kpis", auth).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     const currency = (invoices[0]?.currency as string) || "USD";
@@ -83,6 +86,7 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
       recent,
       version,
       dateFormat,
+      kpis,
     };
   } catch (err) {
     return { error: String(err) };

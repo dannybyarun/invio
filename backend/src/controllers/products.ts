@@ -6,6 +6,14 @@
 import { getDatabase } from "../database/init.ts";
 import { CreateProductRequest, Product } from "../types/index.ts";
 import { generateUUID } from "../utils/uuid.ts";
+import {
+  applyOpeningStock,
+  applyStockAdjustment,
+  syncQuantityOnHand,
+} from "./stock.ts";
+
+const PRODUCT_COLUMNS =
+  "id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at, cost_price, quantity_on_hand, reorder_level";
 
 const mapRowToProduct = (row: unknown[]): Product => ({
   id: row[0] as string,
@@ -20,6 +28,9 @@ const mapRowToProduct = (row: unknown[]): Product => ({
   isActive: Boolean(row[9]),
   createdAt: new Date(row[10] as string),
   updatedAt: new Date(row[11] as string),
+  costPrice: Number(row[12]) || 0,
+  quantityOnHand: Number(row[13]) || 0,
+  reorderLevel: Number(row[14]) || 0,
 });
 
 const toNullable = (v?: string): string | null => {
@@ -56,8 +67,8 @@ function assertProductCodesAvailable(
 export const getProducts = (includeInactive = false): Product[] => {
   const db = getDatabase();
   const query = includeInactive
-    ? "SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products ORDER BY name ASC"
-    : "SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE is_active = 1 ORDER BY name ASC";
+    ? `SELECT ${PRODUCT_COLUMNS} FROM products ORDER BY name ASC`
+    : `SELECT ${PRODUCT_COLUMNS} FROM products WHERE is_active = 1 ORDER BY name ASC`;
   const results = db.query(query) as unknown[][];
   return results.map((row: unknown[]) => mapRowToProduct(row));
 };
@@ -68,7 +79,7 @@ export const getProductByCode = (code: string): Product | null => {
   const db = getDatabase();
   const select = (field: "barcode" | "sku") =>
     db.query(
-      `SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at
+      `SELECT ${PRODUCT_COLUMNS}
        FROM products WHERE is_active = 1 AND ${field} = ? COLLATE NOCASE`,
       [normalized],
     ) as unknown[][];
@@ -87,7 +98,7 @@ export const getProductByCode = (code: string): Product | null => {
 export const getProductById = (id: string): Product | null => {
   const db = getDatabase();
   const results = db.query(
-    "SELECT id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE id = ?",
+    `SELECT ${PRODUCT_COLUMNS} FROM products WHERE id = ?`,
     [id],
   ) as unknown[][];
   if (results.length === 0) return null;
@@ -105,12 +116,15 @@ export const createProduct = (data: CreateProductRequest): Product => {
   const unit = toNullable(data.unit) || "piece";
   const category = toNullable(data.category);
   const taxDefinitionId = toNullable(data.taxDefinitionId);
+  const costPrice = Number(data.costPrice) || 0;
+  const quantityOnHand = Number(data.quantityOnHand) || 0;
+  const reorderLevel = Number(data.reorderLevel) || 0;
 
   assertProductCodesAvailable(db, sku, barcode);
 
   db.query(
-    `INSERT INTO products (id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO products (id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at, cost_price, quantity_on_hand, reorder_level)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
     [
       productId,
       data.name,
@@ -123,8 +137,13 @@ export const createProduct = (data: CreateProductRequest): Product => {
       taxDefinitionId,
       now.toISOString(),
       now.toISOString(),
+      costPrice,
+      quantityOnHand,
+      reorderLevel,
     ],
   );
+
+  if (quantityOnHand > 0) applyOpeningStock(productId, quantityOnHand);
 
   return {
     id: productId,
@@ -139,6 +158,9 @@ export const createProduct = (data: CreateProductRequest): Product => {
     isActive: true,
     createdAt: now,
     updatedAt: now,
+    costPrice,
+    quantityOnHand,
+    reorderLevel,
   };
 };
 
@@ -178,10 +200,19 @@ export const updateProduct = (
   const isActive = data.isActive !== undefined
     ? data.isActive
     : existing.isActive;
+  const costPrice = data.costPrice !== undefined
+    ? Number(data.costPrice) || 0
+    : existing.costPrice || 0;
+  const reorderLevel = data.reorderLevel !== undefined
+    ? Number(data.reorderLevel) || 0
+    : existing.reorderLevel || 0;
+  const newQuantity = data.quantityOnHand !== undefined
+    ? Number(data.quantityOnHand) || 0
+    : undefined;
 
   db.query(
     `UPDATE products SET
-      name = ?, description = ?, unit_price = ?, sku = ?, barcode = ?, unit = ?, category = ?, tax_definition_id = ?, is_active = ?, updated_at = ?
+      name = ?, description = ?, unit_price = ?, sku = ?, barcode = ?, unit = ?, category = ?, tax_definition_id = ?, is_active = ?, cost_price = ?, reorder_level = ?, updated_at = ?
      WHERE id = ?`,
     [
       name,
@@ -193,10 +224,22 @@ export const updateProduct = (
       category,
       taxDefinitionId,
       isActive ? 1 : 0,
+      costPrice,
+      reorderLevel,
       now.toISOString(),
       id,
     ],
   );
+
+  // Stock adjustments are deltas: sync the cache first (so the previous
+  // on-hand value is the live one), then record the difference.
+  if (
+    newQuantity !== undefined && newQuantity !== (existing.quantityOnHand || 0)
+  ) {
+    syncQuantityOnHand([id]);
+    const current = getProductById(id)?.quantityOnHand || 0;
+    applyStockAdjustment(id, newQuantity - current, "Manual adjustment");
+  }
 
   return getProductById(id);
 };

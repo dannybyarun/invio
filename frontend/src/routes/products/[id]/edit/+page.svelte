@@ -62,6 +62,24 @@
           </label>
           <input type="number" id="unitPrice" name="unitPrice" step="0.01" min="0" class="input input-sm input-bordered w-full" value={p.unitPrice} required />
         </div>
+        <div class="form-control w-full">
+          <label class="label pb-1" for="costPrice">
+            <span class="label-text">{t("Cost Price")}</span>
+          </label>
+          <input type="number" id="costPrice" name="costPrice" step="0.01" min="0" class="input input-sm input-bordered w-full" value={p.costPrice || 0} />
+        </div>
+        <div class="form-control w-full">
+          <label class="label pb-1" for="quantityOnHand">
+            <span class="label-text">{t("Quantity On Hand")}</span>
+          </label>
+          <input type="number" id="quantityOnHand" name="quantityOnHand" step="any" min="0" class="input input-sm input-bordered w-full" value={p.quantityOnHand || 0} />
+        </div>
+        <div class="form-control w-full">
+          <label class="label pb-1" for="reorderLevel">
+            <span class="label-text">{t("Reorder Level")}</span>
+          </label>
+          <input type="number" id="reorderLevel" name="reorderLevel" step="any" min="0" class="input input-sm input-bordered w-full" value={p.reorderLevel || 0} />
+        </div>
 
         <div class="form-control w-full">
           <label class="label pb-1" for="sku">

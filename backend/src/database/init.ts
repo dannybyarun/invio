@@ -528,6 +528,248 @@ function migrateInvoicesForVoided(database: DB): void {
   }
 }
 
+function ensureBusinessExtras(database: DB): void {
+  // ---- Inventory: cost price, stock on hand, reorder level ----
+  addColumnIfMissing(database, "products", "cost_price", "NUMERIC DEFAULT 0");
+  addColumnIfMissing(
+    database,
+    "products",
+    "quantity_on_hand",
+    "NUMERIC DEFAULT 0",
+  );
+  addColumnIfMissing(
+    database,
+    "products",
+    "reorder_level",
+    "NUMERIC DEFAULT 0",
+  );
+
+  // Stock movements ledger (source of truth for quantity_on_hand)
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS stock_movements (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      quantity NUMERIC NOT NULL,
+      reason TEXT NOT NULL,
+      ref_type TEXT,
+      ref_id TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_stock_movements_product
+     ON stock_movements(product_id, created_at)`,
+  );
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_stock_movements_ref
+     ON stock_movements(ref_type, ref_id)`,
+  );
+
+  // ---- Suppliers ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      contact_name TEXT,
+      email TEXT,
+      phone TEXT,
+      address TEXT,
+      tax_id TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // ---- Expenses ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id TEXT PRIMARY KEY,
+      expense_date TEXT NOT NULL,
+      supplier_id TEXT REFERENCES suppliers(id),
+      category TEXT,
+      description TEXT,
+      amount NUMERIC NOT NULL DEFAULT 0,
+      tax_amount NUMERIC DEFAULT 0,
+      payment_method TEXT,
+      reference TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date)`,
+  );
+
+  // ---- Purchase orders ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+      id TEXT PRIMARY KEY,
+      po_number TEXT UNIQUE NOT NULL,
+      supplier_id TEXT REFERENCES suppliers(id),
+      order_date TEXT NOT NULL,
+      status TEXT DEFAULT 'draft',
+      notes TEXT,
+      subtotal NUMERIC NOT NULL DEFAULT 0,
+      tax_amount NUMERIC DEFAULT 0,
+      total NUMERIC NOT NULL DEFAULT 0,
+      received_at TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS purchase_order_items (
+      id TEXT PRIMARY KEY,
+      purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+      product_id TEXT REFERENCES products(id),
+      description TEXT NOT NULL,
+      quantity NUMERIC NOT NULL,
+      unit_price NUMERIC NOT NULL,
+      line_total NUMERIC NOT NULL
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_po_items_po
+     ON purchase_order_items(purchase_order_id)`,
+  );
+
+  // ---- Quotes / estimates ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS quotes (
+      id TEXT PRIMARY KEY,
+      quote_number TEXT UNIQUE NOT NULL,
+      customer_id TEXT REFERENCES customers(id),
+      issue_date TEXT NOT NULL,
+      expiry_date TEXT,
+      currency TEXT DEFAULT 'USD',
+      status TEXT DEFAULT 'draft',
+      subtotal NUMERIC NOT NULL DEFAULT 0,
+      discount_amount NUMERIC DEFAULT 0,
+      discount_percentage NUMERIC DEFAULT 0,
+      tax_rate NUMERIC DEFAULT 0,
+      tax_amount NUMERIC DEFAULT 0,
+      total NUMERIC NOT NULL DEFAULT 0,
+      payment_terms TEXT,
+      notes TEXT,
+      converted_invoice_id TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS quote_items (
+      id TEXT PRIMARY KEY,
+      quote_id TEXT NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+      product_id TEXT REFERENCES products(id),
+      description TEXT NOT NULL,
+      quantity NUMERIC NOT NULL,
+      unit TEXT,
+      unit_price NUMERIC NOT NULL,
+      line_total NUMERIC NOT NULL,
+      sort_order INTEGER DEFAULT 0
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_items(quote_id)`,
+  );
+
+  // ---- Credit notes / refunds ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS credit_notes (
+      id TEXT PRIMARY KEY,
+      credit_number TEXT UNIQUE NOT NULL,
+      invoice_id TEXT REFERENCES invoices(id),
+      customer_id TEXT NOT NULL REFERENCES customers(id),
+      issue_date TEXT NOT NULL,
+      reason TEXT,
+      subtotal NUMERIC NOT NULL DEFAULT 0,
+      tax_rate NUMERIC DEFAULT 0,
+      tax_amount NUMERIC DEFAULT 0,
+      total NUMERIC NOT NULL DEFAULT 0,
+      status TEXT DEFAULT 'issued',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_credit_notes_invoice
+     ON credit_notes(invoice_id)`,
+  );
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_credit_notes_customer
+     ON credit_notes(customer_id)`,
+  );
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS credit_note_items (
+      id TEXT PRIMARY KEY,
+      credit_note_id TEXT NOT NULL REFERENCES credit_notes(id) ON DELETE CASCADE,
+      product_id TEXT REFERENCES products(id),
+      description TEXT NOT NULL,
+      quantity NUMERIC NOT NULL,
+      unit_price NUMERIC NOT NULL,
+      line_total NUMERIC NOT NULL,
+      sort_order INTEGER DEFAULT 0
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_credit_note_items_note
+     ON credit_note_items(credit_note_id)`,
+  );
+
+  // ---- Recurring invoices ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS recurring_invoices (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      customer_id TEXT REFERENCES customers(id),
+      frequency TEXT NOT NULL,
+      interval_count INTEGER NOT NULL DEFAULT 1,
+      next_run_date TEXT NOT NULL,
+      last_run_date TEXT,
+      end_date TEXT,
+      default_status TEXT DEFAULT 'draft',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      template_json TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_recurring_next_run
+     ON recurring_invoices(next_run_date, is_active)`,
+  );
+
+  // ---- Manual / partial payments ----
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS invoice_payments (
+      id TEXT PRIMARY KEY,
+      invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      amount NUMERIC NOT NULL,
+      method TEXT,
+      reference TEXT,
+      note TEXT,
+      paid_at TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  database.execute(
+    `CREATE INDEX IF NOT EXISTS idx_invoice_payments_invoice
+     ON invoice_payments(invoice_id, paid_at)`,
+  );
+
+  // ---- Multi-currency: per-invoice exchange rate ----
+  addColumnIfMissing(
+    database,
+    "invoices",
+    "exchange_rate",
+    "NUMERIC DEFAULT 1",
+  );
+  addColumnIfMissing(database, "invoices", "source_quote_id", "TEXT");
+}
+
 function ensureSchemaUpgrades(database: DB): void {
   try {
     ensureCustomerColumns(database);
@@ -542,6 +784,7 @@ function ensureSchemaUpgrades(database: DB): void {
     ensureFonepayQrPayloadTable(database);
     ensurePaymentTransactionsTable(database);
     ensureStatusHistoryTable(database);
+    ensureBusinessExtras(database);
   } catch (e) {
     console.warn("Schema upgrade check failed:", e);
   }

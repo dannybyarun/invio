@@ -27,7 +27,7 @@ export interface ProductUnit {
 export function getCategories(): ProductCategory[] {
   const db = getDatabase();
   const rows = db.query(
-    "SELECT id, code, name, sort_order, is_builtin, created_at FROM product_categories ORDER BY sort_order ASC, name ASC"
+    "SELECT id, code, name, sort_order, is_builtin, created_at FROM product_categories ORDER BY sort_order ASC, name ASC",
   );
   return rows.map((row) => {
     const [id, code, name, sortOrder, isBuiltin, createdAt] = row as [
@@ -36,7 +36,7 @@ export function getCategories(): ProductCategory[] {
       string,
       number,
       number,
-      string
+      string,
     ];
     return {
       id,
@@ -53,7 +53,7 @@ export function getCategoryById(id: string): ProductCategory | null {
   const db = getDatabase();
   const rows = db.query(
     "SELECT id, code, name, sort_order, is_builtin, created_at FROM product_categories WHERE id = ?",
-    [id]
+    [id],
   );
   if (rows.length === 0) return null;
   const [rid, code, name, sortOrder, isBuiltin, createdAt] = rows[0] as [
@@ -62,7 +62,7 @@ export function getCategoryById(id: string): ProductCategory | null {
     string,
     number,
     number,
-    string
+    string,
   ];
   return {
     id: rid,
@@ -74,7 +74,9 @@ export function getCategoryById(id: string): ProductCategory | null {
   };
 }
 
-export function createCategory(data: { code: string; name: string }): ProductCategory {
+export function createCategory(
+  data: { code: string; name: string },
+): ProductCategory {
   const db = getDatabase();
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -83,18 +85,25 @@ export function createCategory(data: { code: string; name: string }): ProductCat
   const maxSort = (maxRows[0] as [number | null])[0] || 0;
   db.query(
     "INSERT INTO product_categories (id, code, name, sort_order, is_builtin, created_at) VALUES (?, ?, ?, ?, 0, ?)",
-    [id, data.code, data.name, maxSort + 1, now]
+    [id, data.code, data.name, maxSort + 1, now],
   );
   return getCategoryById(id)!;
 }
 
-export function updateCategory(id: string, data: { code?: string; name?: string }): ProductCategory | null {
+export function updateCategory(
+  id: string,
+  data: { code?: string; name?: string },
+): ProductCategory | null {
   const db = getDatabase();
   const existing = getCategoryById(id);
   if (!existing) return null;
   const code = data.code ?? existing.code;
   const name = data.name ?? existing.name;
-  db.query("UPDATE product_categories SET code = ?, name = ? WHERE id = ?", [code, name, id]);
+  db.query("UPDATE product_categories SET code = ?, name = ? WHERE id = ?", [
+    code,
+    name,
+    id,
+  ]);
   return getCategoryById(id);
 }
 
@@ -106,7 +115,9 @@ export function deleteCategory(id: string): boolean {
     throw new Error("Cannot delete built-in category");
   }
   // Check if any product uses this category
-  const usage = db.query("SELECT COUNT(*) FROM products WHERE category = ?", [existing.code]);
+  const usage = db.query("SELECT COUNT(*) FROM products WHERE category = ?", [
+    existing.code,
+  ]);
   const count = (usage[0] as [number])[0];
   if (count > 0) {
     throw new Error(`Category is used by ${count} product(s)`);
@@ -119,7 +130,9 @@ export function isCategoryUsed(id: string): { used: boolean; count: number } {
   const db = getDatabase();
   const existing = getCategoryById(id);
   if (!existing) return { used: false, count: 0 };
-  const usage = db.query("SELECT COUNT(*) FROM products WHERE category = ?", [existing.code]);
+  const usage = db.query("SELECT COUNT(*) FROM products WHERE category = ?", [
+    existing.code,
+  ]);
   const count = (usage[0] as [number])[0];
   return { used: count > 0, count };
 }
@@ -128,7 +141,7 @@ export function isCategoryUsed(id: string): { used: boolean; count: number } {
 export function getUnits(): ProductUnit[] {
   const db = getDatabase();
   const rows = db.query(
-    "SELECT id, code, name, sort_order, is_builtin, created_at FROM product_units ORDER BY sort_order ASC, name ASC"
+    "SELECT id, code, name, sort_order, is_builtin, created_at FROM product_units ORDER BY sort_order ASC, name ASC",
   );
   return rows.map((row) => {
     const [id, code, name, sortOrder, isBuiltin, createdAt] = row as [
@@ -137,7 +150,7 @@ export function getUnits(): ProductUnit[] {
       string,
       number,
       number,
-      string
+      string,
     ];
     return {
       id,
@@ -154,7 +167,7 @@ export function getUnitById(id: string): ProductUnit | null {
   const db = getDatabase();
   const rows = db.query(
     "SELECT id, code, name, sort_order, is_builtin, created_at FROM product_units WHERE id = ?",
-    [id]
+    [id],
   );
   if (rows.length === 0) return null;
   const [rid, code, name, sortOrder, isBuiltin, createdAt] = rows[0] as [
@@ -163,7 +176,7 @@ export function getUnitById(id: string): ProductUnit | null {
     string,
     number,
     number,
-    string
+    string,
   ];
   return {
     id: rid,
@@ -184,18 +197,25 @@ export function createUnit(data: { code: string; name: string }): ProductUnit {
   const maxSort = (maxRows[0] as [number | null])[0] || 0;
   db.query(
     "INSERT INTO product_units (id, code, name, sort_order, is_builtin, created_at) VALUES (?, ?, ?, ?, 0, ?)",
-    [id, data.code, data.name, maxSort + 1, now]
+    [id, data.code, data.name, maxSort + 1, now],
   );
   return getUnitById(id)!;
 }
 
-export function updateUnit(id: string, data: { code?: string; name?: string }): ProductUnit | null {
+export function updateUnit(
+  id: string,
+  data: { code?: string; name?: string },
+): ProductUnit | null {
   const db = getDatabase();
   const existing = getUnitById(id);
   if (!existing) return null;
   const code = data.code ?? existing.code;
   const name = data.name ?? existing.name;
-  db.query("UPDATE product_units SET code = ?, name = ? WHERE id = ?", [code, name, id]);
+  db.query("UPDATE product_units SET code = ?, name = ? WHERE id = ?", [
+    code,
+    name,
+    id,
+  ]);
   return getUnitById(id);
 }
 
@@ -207,7 +227,9 @@ export function deleteUnit(id: string): boolean {
     throw new Error("Cannot delete built-in unit");
   }
   // Check if any product uses this unit
-  const usage = db.query("SELECT COUNT(*) FROM products WHERE unit = ?", [existing.code]);
+  const usage = db.query("SELECT COUNT(*) FROM products WHERE unit = ?", [
+    existing.code,
+  ]);
   const count = (usage[0] as [number])[0];
   if (count > 0) {
     throw new Error(`Unit is used by ${count} product(s)`);
@@ -220,7 +242,9 @@ export function isUnitUsed(id: string): { used: boolean; count: number } {
   const db = getDatabase();
   const existing = getUnitById(id);
   if (!existing) return { used: false, count: 0 };
-  const usage = db.query("SELECT COUNT(*) FROM products WHERE unit = ?", [existing.code]);
+  const usage = db.query("SELECT COUNT(*) FROM products WHERE unit = ?", [
+    existing.code,
+  ]);
   const count = (usage[0] as [number])[0];
   return { used: count > 0, count };
 }

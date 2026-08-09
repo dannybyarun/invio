@@ -68,6 +68,74 @@ import {
   updateCategory,
   updateUnit,
 } from "../controllers/productOptions.ts";
+import {
+  createSupplier,
+  deleteSupplier,
+  getSupplierById,
+  getSuppliers,
+  updateSupplier,
+} from "../controllers/suppliers.ts";
+import {
+  createExpense,
+  deleteExpense,
+  getExpenseById,
+  getExpenseCategories,
+  getExpenses,
+  updateExpense,
+} from "../controllers/expenses.ts";
+import {
+  createPurchaseOrder,
+  deletePurchaseOrder,
+  getPurchaseOrderById,
+  getPurchaseOrders,
+  nextPurchaseOrderNumber,
+  receivePurchaseOrder,
+  voidPurchaseOrder,
+} from "../controllers/purchaseOrders.ts";
+import {
+  convertQuoteToInvoice,
+  createQuote,
+  deleteQuote,
+  getQuoteById,
+  getQuotes,
+  nextQuoteNumber,
+  setQuoteStatus,
+  updateQuote,
+} from "../controllers/quotes.ts";
+import {
+  createCreditNote,
+  deleteCreditNote,
+  getCreditNoteById,
+  getCreditNotes,
+  nextCreditNumber,
+  voidCreditNote,
+} from "../controllers/creditNotes.ts";
+import {
+  createRecurringInvoice,
+  deleteRecurringInvoice,
+  getRecurringInvoiceById,
+  getRecurringInvoices,
+  processDueRecurringInvoices,
+  updateRecurringInvoice,
+} from "../controllers/recurring.ts";
+import {
+  addManualPayment,
+  bulkSendReminders,
+  deleteManualPayment,
+  getCustomerStatement,
+  sendPaymentReminder,
+} from "../controllers/payments.ts";
+import {
+  customersToCsv,
+  invoicesToCsv,
+  productsToCsv,
+} from "../controllers/exportCsv.ts";
+import { getDashboardKpis } from "../controllers/dashboard.ts";
+import {
+  applyStockAdjustment,
+  getProductStock,
+  getStockMovements,
+} from "../controllers/stock.ts";
 import { buildInvoiceHTML, generatePDF } from "../utils/pdf.ts";
 import { isEmailConfigured, sendEmail } from "../utils/email.ts";
 import { generateUBLInvoiceXML } from "../utils/ubl.ts"; // legacy direct import
@@ -408,6 +476,14 @@ adminRoutes.use("/export/*", requireAdminAuth);
 
 // Protect report routes
 adminRoutes.use("/reports/*", requireAdminAuth);
+// Business-extra route groups
+adminRoutes.use("/suppliers/*", requireAdminAuth);
+adminRoutes.use("/expenses/*", requireAdminAuth);
+adminRoutes.use("/purchase-orders/*", requireAdminAuth);
+adminRoutes.use("/quotes/*", requireAdminAuth);
+adminRoutes.use("/credit-notes/*", requireAdminAuth);
+adminRoutes.use("/recurring/*", requireAdminAuth);
+adminRoutes.use("/dashboard/*", requireAdminAuth);
 
 // Demo helper: trigger an immediate reset (only effective when DEMO_MODE=true)
 adminRoutes.post("/admin/demo/reset", async (c) => {
@@ -2582,5 +2658,604 @@ adminRoutes.delete("/users/:id", requirePermission("users", "delete"), (c) => {
     return c.json({ error: msg }, 400);
   }
 });
+
+// =========================================================
+// Suppliers
+// =========================================================
+adminRoutes.get("/suppliers", requirePermission("suppliers", "read"), (c) => {
+  try {
+    return c.json(getSuppliers());
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+adminRoutes.get(
+  "/suppliers/:id",
+  requirePermission("suppliers", "read"),
+  (c) => {
+    const supplier = getSupplierById(c.req.param("id"));
+    if (!supplier) return c.json({ error: "Supplier not found" }, 404);
+    return c.json(supplier);
+  },
+);
+adminRoutes.post(
+  "/suppliers",
+  requirePermission("suppliers", "create"),
+  async (c) => {
+    try {
+      return c.json(createSupplier(await c.req.json()));
+    } catch (e) {
+      const msg = String(e);
+      if (/required/i.test(msg)) return c.json({ error: msg }, 400);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+adminRoutes.put(
+  "/suppliers/:id",
+  requirePermission("suppliers", "update"),
+  async (c) => {
+    try {
+      const supplier = updateSupplier(c.req.param("id"), await c.req.json());
+      if (!supplier) return c.json({ error: "Supplier not found" }, 404);
+      return c.json(supplier);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/suppliers/:id",
+  requirePermission("suppliers", "delete"),
+  (c) => {
+    try {
+      deleteSupplier(c.req.param("id"));
+      return c.json({ success: true });
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+// =========================================================
+// Expenses
+// =========================================================
+adminRoutes.get("/expenses", requirePermission("expenses", "read"), (c) => {
+  try {
+    return c.json(getExpenses());
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+adminRoutes.get(
+  "/expenses/categories",
+  requirePermission("expenses", "read"),
+  (c) => {
+    try {
+      return c.json(getExpenseCategories());
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+adminRoutes.get("/expenses/:id", requirePermission("expenses", "read"), (c) => {
+  const expense = getExpenseById(c.req.param("id"));
+  if (!expense) return c.json({ error: "Expense not found" }, 404);
+  return c.json(expense);
+});
+adminRoutes.post(
+  "/expenses",
+  requirePermission("expenses", "create"),
+  async (c) => {
+    try {
+      return c.json(createExpense(await c.req.json()));
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.put(
+  "/expenses/:id",
+  requirePermission("expenses", "update"),
+  async (c) => {
+    try {
+      const expense = updateExpense(c.req.param("id"), await c.req.json());
+      if (!expense) return c.json({ error: "Expense not found" }, 404);
+      return c.json(expense);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/expenses/:id",
+  requirePermission("expenses", "delete"),
+  (c) => {
+    try {
+      deleteExpense(c.req.param("id"));
+      return c.json({ success: true });
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+// =========================================================
+// Purchase orders
+// =========================================================
+adminRoutes.get(
+  "/purchase-orders",
+  requirePermission("purchase_orders", "read"),
+  (c) => {
+    try {
+      return c.json(getPurchaseOrders());
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+adminRoutes.get(
+  "/purchase-orders/next-number",
+  requirePermission("purchase_orders", "read"),
+  (c) => {
+    return c.json({ next: nextPurchaseOrderNumber() });
+  },
+);
+adminRoutes.get(
+  "/purchase-orders/:id",
+  requirePermission("purchase_orders", "read"),
+  (c) => {
+    const po = getPurchaseOrderById(c.req.param("id"));
+    if (!po) return c.json({ error: "Purchase order not found" }, 404);
+    return c.json(po);
+  },
+);
+adminRoutes.post(
+  "/purchase-orders",
+  requirePermission("purchase_orders", "create"),
+  async (c) => {
+    try {
+      return c.json(createPurchaseOrder(await c.req.json()));
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/purchase-orders/:id/receive",
+  requirePermission("purchase_orders", "update"),
+  (c) => {
+    try {
+      const po = receivePurchaseOrder(c.req.param("id"));
+      if (!po) return c.json({ error: "Purchase order not found" }, 404);
+      return c.json(po);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/purchase-orders/:id/void",
+  requirePermission("purchase_orders", "update"),
+  (c) => {
+    try {
+      const po = voidPurchaseOrder(c.req.param("id"));
+      if (!po) return c.json({ error: "Purchase order not found" }, 404);
+      return c.json(po);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/purchase-orders/:id",
+  requirePermission("purchase_orders", "delete"),
+  (c) => {
+    try {
+      deletePurchaseOrder(c.req.param("id"));
+      return c.json({ success: true });
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+// =========================================================
+// Quotes / estimates
+// =========================================================
+adminRoutes.get("/quotes", requirePermission("quotes", "read"), (c) => {
+  try {
+    return c.json(getQuotes());
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+adminRoutes.get(
+  "/quotes/next-number",
+  requirePermission("quotes", "read"),
+  (c) => {
+    return c.json({ next: nextQuoteNumber() });
+  },
+);
+adminRoutes.get("/quotes/:id", requirePermission("quotes", "read"), (c) => {
+  const quote = getQuoteById(c.req.param("id"));
+  if (!quote) return c.json({ error: "Quote not found" }, 404);
+  return c.json(quote);
+});
+adminRoutes.post(
+  "/quotes",
+  requirePermission("quotes", "create"),
+  async (c) => {
+    try {
+      return c.json(createQuote(await c.req.json()));
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.put(
+  "/quotes/:id",
+  requirePermission("quotes", "update"),
+  async (c) => {
+    try {
+      const quote = updateQuote(c.req.param("id"), await c.req.json());
+      if (!quote) return c.json({ error: "Quote not found" }, 404);
+      return c.json(quote);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/quotes/:id/status",
+  requirePermission("quotes", "update"),
+  async (c) => {
+    try {
+      const body = await c.req.json();
+      const quote = setQuoteStatus(c.req.param("id"), body.status);
+      if (!quote) return c.json({ error: "Quote not found" }, 404);
+      return c.json(quote);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/quotes/:id/convert",
+  requirePermission("quotes", "create"),
+  async (c) => {
+    try {
+      const result = await convertQuoteToInvoice(c.req.param("id"));
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/quotes/:id",
+  requirePermission("quotes", "delete"),
+  (c) => {
+    try {
+      deleteQuote(c.req.param("id"));
+      return c.json({ success: true });
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+// =========================================================
+// Credit notes
+// =========================================================
+adminRoutes.get(
+  "/credit-notes",
+  requirePermission("credit_notes", "read"),
+  (c) => {
+    try {
+      return c.json(getCreditNotes());
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+adminRoutes.get(
+  "/credit-notes/next-number",
+  requirePermission("credit_notes", "read"),
+  (c) => {
+    return c.json({ next: nextCreditNumber() });
+  },
+);
+adminRoutes.get(
+  "/credit-notes/:id",
+  requirePermission("credit_notes", "read"),
+  (c) => {
+    const cn = getCreditNoteById(c.req.param("id"));
+    if (!cn) return c.json({ error: "Credit note not found" }, 404);
+    return c.json(cn);
+  },
+);
+adminRoutes.post(
+  "/credit-notes",
+  requirePermission("credit_notes", "create"),
+  async (c) => {
+    try {
+      return c.json(createCreditNote(await c.req.json()));
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/credit-notes/:id/void",
+  requirePermission("credit_notes", "update"),
+  (c) => {
+    try {
+      const cn = voidCreditNote(c.req.param("id"));
+      if (!cn) return c.json({ error: "Credit note not found" }, 404);
+      return c.json(cn);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/credit-notes/:id",
+  requirePermission("credit_notes", "delete"),
+  (c) => {
+    try {
+      deleteCreditNote(c.req.param("id"));
+      return c.json({ success: true });
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+// =========================================================
+// Recurring invoices
+// =========================================================
+adminRoutes.get(
+  "/recurring",
+  requirePermission("recurring_invoices", "read"),
+  (c) => {
+    try {
+      return c.json(getRecurringInvoices());
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+adminRoutes.get(
+  "/recurring/:id",
+  requirePermission("recurring_invoices", "read"),
+  (c) => {
+    const rec = getRecurringInvoiceById(c.req.param("id"));
+    if (!rec) return c.json({ error: "Recurring invoice not found" }, 404);
+    return c.json(rec);
+  },
+);
+adminRoutes.post(
+  "/recurring",
+  requirePermission("recurring_invoices", "create"),
+  async (c) => {
+    try {
+      return c.json(createRecurringInvoice(await c.req.json()));
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/recurring/process",
+  requirePermission("recurring_invoices", "create"),
+  async (c) => {
+    try {
+      const created = await processDueRecurringInvoices();
+      return c.json({ created });
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.put(
+  "/recurring/:id",
+  requirePermission("recurring_invoices", "update"),
+  async (c) => {
+    try {
+      const rec = updateRecurringInvoice(c.req.param("id"), await c.req.json());
+      if (!rec) return c.json({ error: "Recurring invoice not found" }, 404);
+      return c.json(rec);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/recurring/:id",
+  requirePermission("recurring_invoices", "delete"),
+  (c) => {
+    try {
+      deleteRecurringInvoice(c.req.param("id"));
+      return c.json({ success: true });
+    } catch (e) {
+      const msg = String(e);
+      if (/not found/i.test(msg)) return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 400);
+    }
+  },
+);
+
+// =========================================================
+// Payments / reminders / statement
+// =========================================================
+adminRoutes.post(
+  "/invoices/:id/payments",
+  requirePermission("invoices", "update"),
+  async (c) => {
+    try {
+      const invoice = await addManualPayment(
+        c.req.param("id"),
+        await c.req.json(),
+      );
+      return c.json(invoice);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.delete(
+  "/invoices/:id/payments/:paymentId",
+  requirePermission("invoices", "update"),
+  (c) => {
+    try {
+      deleteManualPayment(c.req.param("paymentId"));
+      return c.json({ success: true });
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.get(
+  "/customers/:id/statement",
+  requirePermission("customers", "read"),
+  (c) => {
+    const statement = getCustomerStatement(c.req.param("id"));
+    if (!statement) return c.json({ error: "Customer not found" }, 404);
+    return c.json(statement);
+  },
+);
+adminRoutes.post(
+  "/invoices/:id/remind",
+  requirePermission("invoices", "update"),
+  async (c) => {
+    try {
+      const origin = c.req.header("origin") || c.req.url;
+      const base = new URL(origin).origin || "http://localhost:3000";
+      const result = await sendPaymentReminder(c.req.param("id"), base);
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+adminRoutes.post(
+  "/invoices/bulk-remind",
+  requirePermission("invoices", "update"),
+  async (c) => {
+    try {
+      const body = await c.req.json();
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+      if (ids.length === 0) {
+        return c.json({ error: "No invoices selected" }, 400);
+      }
+      const origin = c.req.header("origin") || c.req.url;
+      const base = new URL(origin).origin || "http://localhost:3000";
+      const result = await bulkSendReminders(ids, base);
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+
+// =========================================================
+// CSV exports (also available under /export/* auth)
+// =========================================================
+adminRoutes.get(
+  "/export/invoices.csv",
+  requirePermission("invoices", "export"),
+  (c) => {
+    const ids = (c.req.query("ids") || "").split(",").map((s) => s.trim())
+      .filter(Boolean);
+    const csv = invoicesToCsv(ids.length > 0 ? ids : undefined);
+    return new Response(csv, {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="invoices.csv"',
+      },
+    });
+  },
+);
+adminRoutes.get(
+  "/export/customers.csv",
+  requirePermission("customers", "read"),
+  (c) => {
+    return new Response(customersToCsv(), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="customers.csv"',
+      },
+    });
+  },
+);
+adminRoutes.get(
+  "/export/products.csv",
+  requirePermission("products", "read"),
+  (c) => {
+    return new Response(productsToCsv(), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="products.csv"',
+      },
+    });
+  },
+);
+
+// =========================================================
+// Dashboard KPIs / stock
+// =========================================================
+adminRoutes.get(
+  "/dashboard/kpis",
+  requirePermission("invoices", "read"),
+  (c) => {
+    try {
+      return c.json(getDashboardKpis());
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+adminRoutes.get(
+  "/products/:id/stock",
+  requirePermission("products", "read"),
+  (c) => {
+    try {
+      const stock = getProductStock(c.req.param("id"));
+      const movements = getStockMovements(c.req.param("id"));
+      return c.json({ stock, movements });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  },
+);
+adminRoutes.post(
+  "/products/:id/stock",
+  requirePermission("products", "update"),
+  async (c) => {
+    try {
+      const body = await c.req.json();
+      const delta = Number(body.delta) || 0;
+      const note = body.note ? String(body.note) : undefined;
+      applyStockAdjustment(c.req.param("id"), delta, note);
+      return c.json({
+        success: true,
+        stock: getProductStock(c.req.param("id")),
+      });
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
 
 export { adminRoutes };

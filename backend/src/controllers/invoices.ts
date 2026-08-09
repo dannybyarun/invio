@@ -22,6 +22,7 @@ import {
   fonepayTransactionId,
   fonepayTransactionReference,
 } from "../utils/fonepay.ts";
+import { deleteStockMovementsForRef, reconcileInvoiceStock } from "./stock.ts";
 
 type LineTaxInput = {
   percent: number;
@@ -633,6 +634,10 @@ export const createInvoice = (
 
   // The customer is always present: normal invoices use the selected customer,
   // while Quick Sell falls back to the stable Walk-in Customer record.
+  // Inventory: rebuild stock movements from the invoice's final state.
+  // (Drafts produce no movements; voided/issued states are reconciled.)
+  reconcileInvoiceStock(invoiceId);
+
   return {
     ...invoice,
     customer,
@@ -902,8 +907,10 @@ export const getInvoices = (): Invoice[] => {
     FROM invoices
     ORDER BY created_at DESC
   `);
-  const list = results.map((row: unknown[]) => mapRowToInvoice(row));
-  return list.map(applyDerivedOverdue);
+  const list = results.map((row: unknown[]) => mapRowToInvoice(row)).map(
+    applyDerivedOverdue,
+  );
+  return attachPaymentSummaries(list);
 };
 
 export interface InvoiceAuditEntry {
@@ -1116,6 +1123,37 @@ export const getInvoiceById = (id: string): InvoiceWithDetails | null => {
     amount: Number(row[5]),
     verifiedAt: new Date(String(row[6])),
   }));
+
+  const manualRows = db.query(
+    `SELECT id, invoice_id, amount, method, reference, note, paid_at, created_at
+     FROM invoice_payments
+     WHERE invoice_id = ?
+     ORDER BY paid_at DESC`,
+    [id],
+  ) as unknown[][];
+  const manualPayments = manualRows.map((row) => ({
+    id: String(row[0]),
+    invoiceId: String(row[1]),
+    amount: Number(row[2]),
+    method: row[3] ? String(row[3]) : undefined,
+    reference: row[4] ? String(row[4]) : undefined,
+    note: row[5] ? String(row[5]) : undefined,
+    paidAt: new Date(String(row[6])),
+    createdAt: new Date(String(row[7])),
+    source: "manual" as const,
+  }));
+
+  const exchangeRow = db.query(
+    "SELECT exchange_rate, source_quote_id FROM invoices WHERE id = ?",
+    [id],
+  ) as unknown[][];
+  const exchangeRate = exchangeRow.length > 0
+    ? Number(exchangeRow[0][0]) || 1
+    : 1;
+  const sourceQuoteId = exchangeRow.length > 0 && exchangeRow[0][1]
+    ? String(exchangeRow[0][1])
+    : undefined;
+
   return {
     ...invoice,
     customer,
@@ -1123,8 +1161,79 @@ export const getInvoiceById = (id: string): InvoiceWithDetails | null => {
     taxes,
     statusHistory,
     paymentTransactions,
+    payments: [...paymentTransactions, ...manualPayments],
+    exchangeRate,
+    sourceQuoteId,
+    ...paymentSummaryForInvoice(id),
   };
 };
+
+/** Compute paid / credited / due for a single invoice. */
+function paymentSummaryForInvoice(id: string): {
+  amountPaid: number;
+  creditApplied: number;
+  amountDue: number;
+} {
+  const db = getDatabase();
+  const paidRow = db.query(
+    `SELECT
+       COALESCE((SELECT SUM(amount) FROM invoice_payments WHERE invoice_id = ?), 0) +
+       COALESCE((SELECT SUM(amount) FROM payment_transactions WHERE invoice_id = ?), 0)`,
+    [id, id],
+  ) as unknown[][];
+  const creditedRow = db.query(
+    "SELECT COALESCE(SUM(total), 0) FROM credit_notes WHERE invoice_id = ? AND status = 'issued'",
+    [id],
+  ) as unknown[][];
+  const totalRow = db.query(
+    "SELECT total FROM invoices WHERE id = ?",
+    [id],
+  ) as unknown[][];
+  const paid = Number(paidRow[0]?.[0]) || 0;
+  const credited = Number(creditedRow[0]?.[0]) || 0;
+  const total = Number(totalRow[0]?.[0]) || 0;
+  return {
+    amountPaid: paid,
+    creditApplied: credited,
+    amountDue: Math.max(0, Math.round((total - paid - credited) * 100) / 100),
+  };
+}
+
+/** Attach paid/credited/due summaries to a batch of invoices (single query). */
+function attachPaymentSummaries<T extends Invoice>(invoices: T[]): T[] {
+  if (invoices.length === 0) return invoices;
+  const db = getDatabase();
+  const ids = invoices.map((inv) => inv.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db.query(
+    `SELECT i.id,
+       COALESCE((SELECT SUM(p.amount) FROM invoice_payments p WHERE p.invoice_id = i.id), 0) +
+       COALESCE((SELECT SUM(t.amount) FROM payment_transactions t WHERE t.invoice_id = i.id), 0) AS paid,
+       COALESCE((SELECT SUM(cn.total) FROM credit_notes cn WHERE cn.invoice_id = i.id AND cn.status = 'issued'), 0) AS credited,
+       i.total
+     FROM invoices i WHERE i.id IN (${placeholders})`,
+    ids,
+  ) as unknown[][];
+  const map = new Map<
+    string,
+    { amountPaid: number; creditApplied: number; amountDue: number }
+  >();
+  for (const row of rows) {
+    const id = String(row[0]);
+    const paid = Number(row[1]) || 0;
+    const credited = Number(row[2]) || 0;
+    const total = Number(row[3]) || 0;
+    map.set(id, {
+      amountPaid: paid,
+      creditApplied: credited,
+      amountDue: Math.max(0, Math.round((total - paid - credited) * 100) / 100),
+    });
+  }
+  return invoices.map((inv) => {
+    const summary = map.get(inv.id);
+    return summary ? { ...inv, ...summary } : inv;
+  });
+}
 
 export const getInvoiceByShareToken = (
   shareToken: string,
@@ -1619,6 +1728,11 @@ export const updateInvoice = async (
     throw e;
   }
 
+  // Items or status changed → keep inventory ledger in sync.
+  if (data.items || (data.status && data.status !== existing.status)) {
+    reconcileInvoiceStock(id);
+  }
+
   return await getInvoiceById(id);
 };
 
@@ -1639,6 +1753,9 @@ export const deleteInvoice = async (id: string): Promise<boolean> => {
   }
 
   const db = getDatabase();
+
+  // Remove the invoice's stock movements first (they reference its items).
+  deleteStockMovementsForRef("invoice", id);
 
   // Delete items first (CASCADE should handle this, but being explicit)
   db.query("DELETE FROM invoice_items WHERE invoice_id = ?", [id]);
@@ -1874,6 +1991,9 @@ export const voidInvoice = async (id: string): Promise<{ success: true }> => {
     }
     throw e;
   }
+
+  // Voiding restores stock (reconciliation deletes the sale movements).
+  reconcileInvoiceStock(id);
 
   return { success: true };
 };

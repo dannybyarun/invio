@@ -16,7 +16,9 @@
   let canDelete = $derived(hasPermission(user, "products", "delete"));
 
   function fmtMoney(cur: string | undefined, n: number) {
-    cur = String(data.settings?.currency || cur || "USD").trim().toUpperCase();
+    cur = String(data.settings?.currency || cur || "USD")
+      .trim()
+      .toUpperCase();
     try {
       return new Intl.NumberFormat(numberFormatLocale(data.localization?.locale, data.localization?.numberFormat), { style: "currency", currency: cur }).format(n || 0);
     } catch {
@@ -113,6 +115,23 @@
           </div>
         </div>
       {/if}
+      <div>
+        <div class="mb-1 text-sm opacity-70">{t("Cost Price")}</div>
+        <div class="font-medium">{fmtMoney(p.currency, p.costPrice)}</div>
+      </div>
+      <div>
+        <div class="mb-1 text-sm opacity-70">{t("Stock On Hand")}</div>
+        <div class="flex items-center gap-2 font-medium">
+          <span>{Number(p.quantityOnHand) || 0}</span>
+          {#if (Number(p.reorderLevel) || 0) > 0 && (Number(p.quantityOnHand) || 0) <= Number(p.reorderLevel)}
+            <span class="badge badge-warning badge-sm">{t("Low stock")}</span>
+          {/if}
+        </div>
+      </div>
+      <div>
+        <div class="mb-1 text-sm opacity-70">{t("Reorder Level")}</div>
+        <div class="font-medium">{Number(p.reorderLevel) || 0}</div>
+      </div>
     </div>
   </div>
 {/if}

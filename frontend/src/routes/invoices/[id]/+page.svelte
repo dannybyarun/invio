@@ -72,6 +72,83 @@
   let emailEnabled = $derived(Boolean(data.emailEnabled));
   let canExport = $derived(hasPermission(user, "invoices", "export"));
 
+  // ---- Partial payments / reminders / credit notes ----
+  let paymentForm = $state({ amount: "", method: "Cash", reference: "", paidAt: new Date().toISOString().slice(0, 10) });
+  let paymentSaving = $state(false);
+  let paymentMessage = $state("");
+  let remindSending = $state(false);
+  let remindMessage = $state("");
+
+  let amountPaid = $derived(Number(invoice?.amountPaid) || 0);
+  let amountDue = $derived(Number(invoice?.amountDue) ?? Number(invoice?.total || 0));
+  let paidPct = $derived(invoice?.total ? Math.min(100, Math.round((amountPaid / Number(invoice.total)) * 100)) : 0);
+  let canRecordPayment = $derived(canUpdate && Boolean(invoice && invoice.status !== "draft" && invoice.status !== "voided" && amountDue > 0));
+  let canCreateCreditNote = $derived(hasPermission(user, "credit_notes", "create"));
+
+  async function recordPayment() {
+    paymentSaving = true;
+    paymentMessage = "";
+    const amount = parseFloat(paymentForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      paymentMessage = t("Amount must be greater than zero");
+      paymentSaving = false;
+      return;
+    }
+    if (amount > amountDue) {
+      paymentMessage = t("Amount exceeds the outstanding balance");
+      paymentSaving = false;
+      return;
+    }
+    try {
+      const res = await fetch(`/api/v1/invoices/${invoice.id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount,
+          method: paymentForm.method || undefined,
+          reference: paymentForm.reference || undefined,
+          paidAt: paymentForm.paidAt || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || t("Unable to record payment"));
+      paymentForm.amount = "";
+      paymentMessage = t("Payment recorded");
+      location.reload();
+    } catch (e: any) {
+      paymentMessage = e.message || String(e);
+    } finally {
+      paymentSaving = false;
+    }
+  }
+
+  async function deletePayment(paymentId: string) {
+    if (!confirm(t("Delete this payment?"))) return;
+    try {
+      const res = await fetch(`/api/v1/invoices/${invoice.id}/payments/${paymentId}`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Failed");
+      location.reload();
+    } catch (e: any) {
+      paymentMessage = e.message || String(e);
+    }
+  }
+
+  async function sendReminder() {
+    remindSending = true;
+    remindMessage = "";
+    try {
+      const res = await fetch(`/api/v1/invoices/${invoice.id}/remind`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || t("Unable to send reminder"));
+      remindMessage = body.emailed ? t("Reminder email sent") : body.reason || t("Reminder not sent");
+    } catch (e: any) {
+      remindMessage = e.message || String(e);
+    } finally {
+      remindSending = false;
+    }
+  }
+
   let defaultEmailSubject = $derived(invoice ? `Invoice #${invoice.invoiceNumber || invoice.id}` : "Invoice");
   let defaultEmailTo = $derived(invoice?.customer?.email ?? "");
 
@@ -578,6 +655,74 @@
         <span class="mr-1 opacity-70">{t("Total")}:</span>
         <span class="font-bold">{fmtMoney(invoice.total)}</span>
       </div>
+      {#if invoice.status !== "draft" && invoice.status !== "voided"}
+        <div class="rounded-box border-base-300 mt-4 space-y-2 border p-4">
+          <div class="flex items-center justify-between text-sm">
+            <span class="opacity-70">{t("Paid")}:</span>
+            <span class="text-success font-medium">{fmtMoney(amountPaid)}</span>
+          </div>
+          <div class="flex items-center justify-between text-sm">
+            <span class="opacity-70">{t("Due")}:</span>
+            <span class="font-semibold {amountDue > 0 ? 'text-error' : 'text-success'}">{fmtMoney(amountDue)}</span>
+          </div>
+          <progress class="progress progress-success w-full" value={paidPct} max="100"></progress>
+
+          {#if (invoice.payments || []).length > 0}
+            <div class="space-y-1">
+              {#each invoice.payments as pmt (pmt.id)}
+                <div class="flex items-center justify-between gap-2 text-xs">
+                  <span class="opacity-75">
+                    {pmt.source === "manual" ? pmt.method || t("Payment") : pmt.provider || "Fonepay"} · {pmt.source === "manual"
+                      ? String(pmt.paidAt).slice(0, 10)
+                      : String(pmt.verifiedAt).slice(0, 10)}
+                    {#if pmt.source === "manual" && pmt.reference}<span class="opacity-60">· {pmt.reference}</span>{/if}
+                  </span>
+                  <span class="flex items-center gap-2">
+                    <span class="font-medium">{fmtMoney(pmt.amount)}</span>
+                    {#if pmt.source === "manual" && canUpdate}
+                      <button class="btn btn-ghost btn-xs btn-square" onclick={() => deletePayment(pmt.id)} title={t("Delete payment")}>×</button>
+                    {/if}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if canRecordPayment}
+            <div class="border-base-300 space-y-2 border-t pt-3">
+              <div class="text-xs font-semibold">{t("Record payment")}</div>
+              <div class="flex flex-wrap items-center gap-2">
+                <input type="number" min="0" step="0.01" class="input input-sm input-bordered w-28" placeholder={t("Amount")} bind:value={paymentForm.amount} />
+                <select class="select select-sm select-bordered" bind:value={paymentForm.method}>
+                  <option>Cash</option>
+                  <option>Bank Transfer</option>
+                  <option>Card</option>
+                  <option>Fonepay</option>
+                </select>
+                <input type="date" class="input input-sm input-bordered" bind:value={paymentForm.paidAt} />
+                <input class="input input-sm input-bordered w-36" placeholder={t("Reference")} bind:value={paymentForm.reference} />
+                <button class="btn btn-sm btn-primary" onclick={recordPayment} disabled={paymentSaving}>
+                  {#if paymentSaving}<span class="loading loading-spinner loading-xs"></span>{/if}{t("Add Payment")}
+                </button>
+              </div>
+              {#if paymentMessage}<p class="text-xs opacity-80">{paymentMessage}</p>{/if}
+            </div>
+          {/if}
+
+          <div class="border-base-300 flex flex-wrap gap-2 border-t pt-3">
+            {#if invoice.status === "sent" || invoice.status === "overdue"}
+              <button class="btn btn-sm btn-outline" onclick={sendReminder} disabled={remindSending}>
+                {#if remindSending}<span class="loading loading-spinner loading-xs"></span>{/if}<Mail size={14} />
+                {t("Send Reminder")}
+              </button>
+            {/if}
+            {#if canCreateCreditNote}
+              <a href={`/credit-notes/new?invoice=${invoice.id}`} class="btn btn-sm btn-outline">{t("Issue Credit Note")}</a>
+            {/if}
+          </div>
+          {#if remindMessage}<p class="text-xs opacity-80">{remindMessage}</p>{/if}
+        </div>
+      {/if}
       <div>
         <span class="mr-1 opacity-70">{t("Payment Terms")}:</span>
         <span class="font-medium">{invoice.paymentTerms || "-"}</span>

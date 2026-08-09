@@ -78,7 +78,11 @@ export const actions: Actions = {
         const paymentMethod =
           data.get("paymentMethod")?.toString().trim() || undefined;
         if (paymentMethod === "Fonepay") {
-          await backendPost(`/api/v1/invoices/${id}/verify-payment`, locals.authHeader, {});
+          await backendPost(
+            `/api/v1/invoices/${id}/verify-payment`,
+            locals.authHeader,
+            {},
+          );
         } else {
           await backendPut(`/api/v1/invoices/${id}`, locals.authHeader, {
             status: "paid",
@@ -120,18 +124,24 @@ export const actions: Actions = {
           .filter((e) => e.includes("@"));
 
         if (to.length === 0) {
-          return fail(400, { emailError: "Enter at least one valid recipient email address." });
+          return fail(400, {
+            emailError: "Enter at least one valid recipient email address.",
+          });
         }
         if (!subject) {
           return fail(400, { emailError: "Subject is required." });
         }
 
         try {
-          await backendPost(`/api/v1/invoices/${id}/send-email`, locals.authHeader, {
-            to,
-            subject,
-            message,
-          });
+          await backendPost(
+            `/api/v1/invoices/${id}/send-email`,
+            locals.authHeader,
+            {
+              to,
+              subject,
+              message,
+            },
+          );
           return { emailSent: true, emailRecipients: to };
         } catch (e) {
           return fail(502, { emailError: `Failed to send: ${String(e)}` });

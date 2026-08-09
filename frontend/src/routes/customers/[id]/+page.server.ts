@@ -17,11 +17,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
   }
 
   try {
-    const customer = await backendGet(
-      `/api/v1/customers/${params.id}`,
-      locals.authHeader,
-    );
-    return { customer };
+    const [customer, statement] = await Promise.all([
+      backendGet(`/api/v1/customers/${params.id}`, locals.authHeader),
+      backendGet(
+        `/api/v1/customers/${params.id}/statement`,
+        locals.authHeader,
+      ).catch(() => null),
+    ]);
+    return { customer, statement };
   } catch (err: any) {
     return {
       error: err.message,
