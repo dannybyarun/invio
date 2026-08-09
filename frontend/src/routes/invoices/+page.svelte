@@ -5,6 +5,22 @@
   import { invalidateAll } from "$app/navigation";
   import { SvelteSet } from "svelte/reactivity";
   import { formatDateWithBs, numberFormatLocale } from "$lib/utils/dates";
+  import {
+    bsMonthName,
+    currentBsParts,
+    currentFiscalYear,
+    fiscalYearLabel,
+    inBsMonth,
+    inBsYear,
+    inDay,
+    inFiscalYear,
+    inRange,
+    inWeekOf,
+    nepaliFiscalYear,
+    parseDateValue,
+    toBs,
+    toDateInputValue,
+  } from "$lib/utils/fiscal";
 
   let { data } = $props();
 
@@ -34,6 +50,52 @@
   let invoices = $state<any[]>([]);
   let filterStatus = $state(page.url.searchParams.get("status") || "all");
   let isOutstandingFilter = (status: string) => status === "outstanding";
+
+  // Period (date) filter — Nepali-friendly periods read from the URL.
+  let periodMode = $state(page.url.searchParams.get("period") || "all"); // all | fiscal | year | month | week | day | custom
+  let todayInput = $state(toDateInputValue(new Date()));
+  let filterFy = $state(page.url.searchParams.get("fy") ? Number(page.url.searchParams.get("fy")) : currentFiscalYear());
+  let filterBsYear = $state(page.url.searchParams.get("year") ? Number(page.url.searchParams.get("year")) : currentBsParts().year);
+  let filterBsMonth = $state(
+    (() => {
+      const raw = page.url.searchParams.get("month");
+      const m = raw ? Number(raw) : NaN;
+      return Number.isInteger(m) && m >= 0 && m <= 11 ? m : currentBsParts().month;
+    })(),
+  );
+  let weekAnchor = $state(page.url.searchParams.get("week") || todayInput);
+  let dayValue = $state(page.url.searchParams.get("day") || todayInput);
+  let customFrom = $state(page.url.searchParams.get("from") || "");
+  let customTo = $state(page.url.searchParams.get("to") || "");
+
+  let fiscalYears = $derived.by(() => {
+    const years: number[] = [];
+    for (const i of invoices) {
+      const fy = nepaliFiscalYear(i.issueDate);
+      if (fy != null && !years.includes(fy)) years.push(fy);
+    }
+    if (!years.includes(currentFiscalYear())) years.push(currentFiscalYear());
+    if (Number.isInteger(filterFy) && !years.includes(filterFy)) years.push(filterFy);
+    return years.sort((a, b) => a - b);
+  });
+  let bsYears = $derived.by(() => {
+    const years: number[] = [];
+    for (const i of invoices) {
+      const bs = toBs(i.issueDate);
+      if (bs && !years.includes(bs.year)) years.push(bs.year);
+    }
+    if (!years.includes(currentBsParts().year)) years.push(currentBsParts().year);
+    if (Number.isInteger(filterBsYear) && !years.includes(filterBsYear)) years.push(filterBsYear);
+    return years.sort((a, b) => a - b);
+  });
+  let weekRangeText = $derived.by(() => {
+    const a = parseDateValue(weekAnchor);
+    if (!a) return "";
+    const offset = (a.getDay() + 6) % 7;
+    const start = new Date(a.getFullYear(), a.getMonth(), a.getDate() - offset);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    return `${formatDateWithBs(start, dateLocale)} – ${formatDateWithBs(end, dateLocale)}`;
+  });
 
   let searchQuery = $state("");
   let sortKey = $state<"invoiceNumber" | "customer" | "total" | "status" | "issueDate" | "updatedAt">("invoiceNumber");
@@ -83,6 +145,17 @@
           return false;
         }
       }
+      if (periodMode !== "all") {
+        const issueDate = i.issueDate as string | undefined;
+        let ok = false;
+        if (periodMode === "fiscal") ok = inFiscalYear(issueDate, filterFy);
+        else if (periodMode === "year") ok = inBsYear(issueDate, filterBsYear);
+        else if (periodMode === "month") ok = inBsMonth(issueDate, filterBsYear, filterBsMonth);
+        else if (periodMode === "week") ok = inWeekOf(issueDate, weekAnchor);
+        else if (periodMode === "day") ok = inDay(issueDate, dayValue);
+        else if (periodMode === "custom") ok = inRange(issueDate, customFrom, customTo);
+        if (!ok) return false;
+      }
       const query = searchQuery.trim().toLowerCase();
       if (!query) return true;
       return [i.invoiceNumber, i.customer?.name, i.paidWith, i.paymentMethod].some((value) =>
@@ -131,7 +204,9 @@
     selectedIds.clear();
   });
 
-  let listViewKey = $derived(`${searchQuery}\u0000${filterStatus}\u0000${sortKey}\u0000${sortDirection}\u0000${pageSize}`);
+  let listViewKey = $derived(
+    `${searchQuery}\u0000${filterStatus}\u0000${periodMode}\u0000${filterFy}\u0000${filterBsYear}\u0000${filterBsMonth}\u0000${weekAnchor}\u0000${dayValue}\u0000${customFrom}\u0000${customTo}\u0000${sortKey}\u0000${sortDirection}\u0000${pageSize}`,
+  );
   $effect(() => {
     listViewKey;
     pageNumber = 1;
@@ -152,6 +227,11 @@
     selectedIds.clear();
     bulkMessage = "";
     bulkError = "";
+  }
+
+  function clearPeriodFilter() {
+    periodMode = "all";
+    resetListPosition();
   }
 
   function toggleSelection(id: string) {
@@ -304,6 +384,67 @@
         resetListPosition();
       }}>{t("Voided")}</button
     >
+  </div>
+  <div class="border-base-300 flex flex-wrap items-center gap-2 border-t pt-3">
+    <select class="select select-bordered select-sm" bind:value={periodMode} onchange={resetListPosition} aria-label={t("Period")}>
+      <option value="all">{t("All periods")}</option>
+      <option value="fiscal">{t("Fiscal Year")}</option>
+      <option value="year">{t("Year")}</option>
+      <option value="month">{t("Month")}</option>
+      <option value="week">{t("Week")}</option>
+      <option value="day">{t("Day")}</option>
+      <option value="custom">{t("Custom range")}</option>
+    </select>
+    {#if periodMode === "fiscal"}
+      <select class="select select-bordered select-sm" bind:value={filterFy} onchange={resetListPosition} aria-label={t("Fiscal Year")}>
+        {#each fiscalYears as fy (fy)}
+          <option value={fy}>{fiscalYearLabel(fy)}</option>
+        {/each}
+      </select>
+    {:else if periodMode === "year"}
+      <select class="select select-bordered select-sm" bind:value={filterBsYear} onchange={resetListPosition} aria-label={t("Year")}>
+        {#each bsYears as y (y)}
+          <option value={y}>{y}</option>
+        {/each}
+      </select>
+    {:else if periodMode === "month"}
+      <select class="select select-bordered select-sm" bind:value={filterBsYear} onchange={resetListPosition} aria-label={t("Year")}>
+        {#each bsYears as y (y)}
+          <option value={y}>{y}</option>
+        {/each}
+      </select>
+      <select class="select select-bordered select-sm" bind:value={filterBsMonth} onchange={resetListPosition} aria-label={t("Month")}>
+        {#each Array.from({ length: 12 }, (_, m) => m) as m (m)}
+          <option value={m}>{bsMonthName(m, dateLocale)}</option>
+        {/each}
+      </select>
+    {:else if periodMode === "week"}
+      <input type="date" class="input input-bordered input-sm" bind:value={weekAnchor} onchange={resetListPosition} aria-label={t("Week containing")} />
+    {:else if periodMode === "day"}
+      <input type="date" class="input input-bordered input-sm" bind:value={dayValue} onchange={resetListPosition} aria-label={t("Day")} />
+    {:else if periodMode === "custom"}
+      <input type="date" class="input input-bordered input-sm" bind:value={customFrom} onchange={resetListPosition} aria-label={t("From")} />
+      <span class="text-xs opacity-60">–</span>
+      <input type="date" class="input input-bordered input-sm" bind:value={customTo} onchange={resetListPosition} aria-label={t("To")} />
+    {/if}
+    {#if periodMode !== "all"}
+      <button type="button" class="btn btn-ghost btn-xs" onclick={clearPeriodFilter}>{t("Clear filter")}</button>
+    {/if}
+    <span class="text-xs opacity-70">
+      {#if periodMode === "fiscal"}
+        {t("Fiscal Year")}: {fiscalYearLabel(filterFy)}
+      {:else if periodMode === "year"}
+        {t("Year")}: {filterBsYear}
+      {:else if periodMode === "month"}
+        {bsMonthName(filterBsMonth, dateLocale)} {filterBsYear}
+      {:else if periodMode === "week"}
+        {t("Week")}: {weekRangeText}
+      {:else if periodMode === "day"}
+        {t("Day")}: {formatDateWithBs(dayValue, dateLocale)}
+      {:else if periodMode === "custom"}
+        {t("Custom range")}: {formatDateWithBs(customFrom, dateLocale) || "…"} – {formatDateWithBs(customTo, dateLocale) || "…"}
+      {/if}
+    </span>
   </div>
   {#if canSelect && selectedInvoices.length > 0}
     <div class="border-base-300 bg-base-200/60 flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">

@@ -104,7 +104,9 @@ function ensureWalkInCustomer(): Customer {
 
   const now = new Date();
   const nextNumber = Number(
-    (db.query("SELECT COALESCE(MAX(customer_number), 0) FROM customers") as unknown[][])[0]?.[0] || 0,
+    (db.query(
+      "SELECT COALESCE(MAX(customer_number), 0) FROM customers",
+    ) as unknown[][])[0]?.[0] || 0,
   ) + 1;
   try {
     db.query(
@@ -309,7 +311,9 @@ export const createInvoice = (
   data: CreateInvoiceRequest,
 ): InvoiceWithDetails => {
   const db = getDatabase();
-  const customer = data.customerId ? getCustomerById(data.customerId) : ensureWalkInCustomer();
+  const customer = data.customerId
+    ? getCustomerById(data.customerId)
+    : ensureWalkInCustomer();
   if (!customer) throw new Error("Customer not found");
   const customerId = customer.id;
   const invoiceId = generateUUID();
@@ -337,7 +341,9 @@ export const createInvoice = (
       );
       if (rows.length > 0) {
         const pattern = String((rows[0] as unknown[])[0] || "").trim();
-        if (mustAllocateNumber || (pattern && /\{(C?SEQ|CNUM)\}/.test(pattern))) {
+        if (
+          mustAllocateNumber || (pattern && /\{(C?SEQ|CNUM)\}/.test(pattern))
+        ) {
           invoiceNumber = getNextInvoiceNumber(customerId);
         } else {
           invoiceNumber = generateDraftInvoiceNumber();
@@ -421,10 +427,11 @@ export const createInvoice = (
     : undefined;
   // A QR being generated is not proof of payment. Fonepay invoices start as
   // sent/pending and can become paid only after report reconciliation.
-  const invoiceStatus: Invoice["status"] = fonepay.paymentMethod === "Fonepay" &&
+  const invoiceStatus: Invoice["status"] =
+    fonepay.paymentMethod === "Fonepay" &&
       (data.status === "paid" || data.status === "draft")
-    ? "sent"
-    : (data.status || "draft") as Invoice["status"];
+      ? "sent"
+      : (data.status || "draft") as Invoice["status"];
 
   const pricesIncludeTax = data.pricesIncludeTax ?? defaultPricesIncludeTax;
   const roundingMode = data.roundingMode || defaultRoundingMode;
@@ -656,9 +663,15 @@ export async function verifyFonepayPayment(id: string): Promise<{
   reason?: string;
 }> {
   const initial = getInvoiceById(id);
-  if (!initial) return { verified: false, invoice: null, reason: "Invoice not found" };
+  if (!initial) {
+    return { verified: false, invoice: null, reason: "Invoice not found" };
+  }
   if (initial.paymentMethod !== "Fonepay") {
-    return { verified: false, invoice: initial, reason: "Invoice is not a Fonepay payment" };
+    return {
+      verified: false,
+      invoice: initial,
+      reason: "Invoice is not a Fonepay payment",
+    };
   }
   if (initial.status === "paid" || initial.status === "complete") {
     const existingPayment = initial.paymentTransactions?.[0];
@@ -682,15 +695,26 @@ export async function verifyFonepayPayment(id: string): Promise<{
 
   const lastAttempt = verificationAttemptCache.get(id) || 0;
   if (Date.now() - lastAttempt < VERIFICATION_MIN_INTERVAL_MS) {
-    return { verified: false, invoice: initial, reason: "Fonepay verification was checked recently" };
+    return {
+      verified: false,
+      invoice: initial,
+      reason: "Fonepay verification was checked recently",
+    };
   }
   verificationAttemptCache.set(id, Date.now());
 
   const references = [initial.fonepayBillId, initial.invoiceNumber, initial.id]
     .filter((value): value is string => !!value && value.trim().length > 0);
   const expectedAmount = Number(initial.total);
-  if (references.length === 0 || !Number.isFinite(expectedAmount) || expectedAmount <= 0) {
-    return { verified: false, invoice: initial, reason: "Invoice has no valid Fonepay reference or amount" };
+  if (
+    references.length === 0 || !Number.isFinite(expectedAmount) ||
+    expectedAmount <= 0
+  ) {
+    return {
+      verified: false,
+      invoice: initial,
+      reason: "Invoice has no valid Fonepay reference or amount",
+    };
   }
 
   const today = new Date();
@@ -717,17 +741,29 @@ export async function verifyFonepayPayment(id: string): Promise<{
     if (matched) break;
   }
   if (!matched) {
-    return { verified: false, invoice: getInvoiceById(id), reason: "No matching settled Fonepay transaction found" };
+    return {
+      verified: false,
+      invoice: getInvoiceById(id),
+      reason: "No matching settled Fonepay transaction found",
+    };
   }
 
   const providerTransactionId = fonepayTransactionId(matched);
   if (!providerTransactionId) {
-    return { verified: false, invoice: getInvoiceById(id), reason: "Fonepay transaction has no stable transaction ID" };
+    return {
+      verified: false,
+      invoice: getInvoiceById(id),
+      reason: "Fonepay transaction has no stable transaction ID",
+    };
   }
   const providerReference = fonepayTransactionReference(matched) || undefined;
   const matchedAmount = fonepayTransactionAmount(matched);
   if (matchedAmount === null) {
-    return { verified: false, invoice: getInvoiceById(id), reason: "Fonepay transaction has no valid amount" };
+    return {
+      verified: false,
+      invoice: getInvoiceById(id),
+      reason: "Fonepay transaction has no valid amount",
+    };
   }
 
   const db = getDatabase();
@@ -743,16 +779,28 @@ export async function verifyFonepayPayment(id: string): Promise<{
     const currentStatus = String(currentRows[0][0]);
     const currentMethod = String(currentRows[0][1] || "");
     const currentTotal = Number(currentRows[0][2]);
-    if (currentMethod !== "Fonepay") throw new Error("Invoice is no longer a Fonepay payment");
+    if (currentMethod !== "Fonepay") {
+      throw new Error("Invoice is no longer a Fonepay payment");
+    }
     if (Math.round(currentTotal * 100) !== Math.round(expectedAmount * 100)) {
-      throw new Error("Invoice total changed; payment verification was cancelled");
+      throw new Error(
+        "Invoice total changed; payment verification was cancelled",
+      );
     }
     if (currentStatus !== "paid" && currentStatus !== "complete") {
       db.query(
         `INSERT INTO payment_transactions
          (id, invoice_id, provider, provider_transaction_id, provider_reference, amount, verified_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [paymentId, id, "fonepay", providerTransactionId, providerReference || null, matchedAmount, verifiedAt],
+        [
+          paymentId,
+          id,
+          "fonepay",
+          providerTransactionId,
+          providerReference || null,
+          matchedAmount,
+          verifiedAt,
+        ],
       );
       db.query(
         `UPDATE invoices
@@ -776,7 +824,12 @@ export async function verifyFonepayPayment(id: string): Promise<{
       /* ignore */
     }
     const message = error instanceof Error ? error.message : String(error);
-    if (/UNIQUE constraint failed: payment_transactions\.(provider, payment_transactions\.provider_transaction_id|invoice_id, payment_transactions\.provider)/i.test(message) || /UNIQUE constraint failed: payment_transactions\.(provider, provider_transaction_id|invoice_id, provider)/i.test(message)) {
+    if (
+      /UNIQUE constraint failed: payment_transactions\.(provider, payment_transactions\.provider_transaction_id|invoice_id, payment_transactions\.provider)/i
+        .test(message) ||
+      /UNIQUE constraint failed: payment_transactions\.(provider, provider_transaction_id|invoice_id, provider)/i
+        .test(message)
+    ) {
       const existingRows = db.query(
         `SELECT id, invoice_id, provider_transaction_id, provider_reference, amount, verified_at
          FROM payment_transactions
@@ -800,7 +853,11 @@ export async function verifyFonepayPayment(id: string): Promise<{
           reason: "Payment already verified",
         };
       }
-      return { verified: false, invoice: getInvoiceById(id), reason: "This Fonepay transaction is already linked to another invoice" };
+      return {
+        verified: false,
+        invoice: getInvoiceById(id),
+        reason: "This Fonepay transaction is already linked to another invoice",
+      };
     }
     throw error;
   }
@@ -848,6 +905,99 @@ export const getInvoices = (): Invoice[] => {
   const list = results.map((row: unknown[]) => mapRowToInvoice(row));
   return list.map(applyDerivedOverdue);
 };
+
+export interface InvoiceAuditEntry {
+  invoice: Invoice;
+  customerName?: string;
+  items: Array<{
+    id: string;
+    invoiceId: string;
+    productId?: string;
+    description: string;
+    quantity: number;
+    unit?: string;
+    unitPrice: number;
+    lineTotal: number;
+    notes?: string;
+    sortOrder: number;
+  }>;
+  history: StatusHistoryEntry[];
+  payments: Array<{
+    id: string;
+    invoiceId: string;
+    provider: string;
+    providerTransactionId: string;
+    providerReference?: string;
+    amount: number;
+    verifiedAt: Date;
+  }>;
+}
+
+/**
+ * Full audit trail for every invoice: line items, status history and payment
+ * transactions. Used by the fiscal-year audit report.
+ */
+export function getInvoiceAudit(): InvoiceAuditEntry[] {
+  const db = getDatabase();
+  const invoices = getInvoices();
+  const entries: InvoiceAuditEntry[] = [];
+
+  for (const inv of invoices) {
+    const itemRows = db.query(
+      `SELECT id, invoice_id, product_id, description, quantity, unit, unit_price, line_total, notes, sort_order
+       FROM invoice_items
+       WHERE invoice_id = ?
+       ORDER BY sort_order`,
+      [inv.id],
+    ) as unknown[][];
+    const items = itemRows.map((row) => ({
+      id: String(row[0]),
+      invoiceId: String(row[1]),
+      productId: row[2] ? String(row[2]) : undefined,
+      description: String(row[3]),
+      quantity: Number(row[4]),
+      unit: row[5] ? String(row[5]) : undefined,
+      unitPrice: Number(row[6]),
+      lineTotal: Number(row[7]),
+      notes: row[8] ? String(row[8]) : undefined,
+      sortOrder: Number(row[9]),
+    }));
+
+    const paymentRows = db.query(
+      `SELECT id, invoice_id, provider, provider_transaction_id, provider_reference, amount, verified_at
+       FROM payment_transactions
+       WHERE invoice_id = ?
+       ORDER BY verified_at DESC`,
+      [inv.id],
+    ) as unknown[][];
+    const payments = paymentRows.map((row) => ({
+      id: String(row[0]),
+      invoiceId: String(row[1]),
+      provider: String(row[2]),
+      providerTransactionId: String(row[3]),
+      providerReference: row[4] ? String(row[4]) : undefined,
+      amount: Number(row[5]),
+      verifiedAt: new Date(String(row[6])),
+    }));
+
+    let customerName: string | undefined = undefined;
+    try {
+      customerName = getCustomerById(inv.customerId)?.name;
+    } catch {
+      /* ignore */
+    }
+
+    entries.push({
+      invoice: inv,
+      customerName,
+      items,
+      history: getStatusHistory(inv.id),
+      payments,
+    });
+  }
+
+  return entries;
+}
 
 export const getInvoiceById = (id: string): InvoiceWithDetails | null => {
   const db = getDatabase();
@@ -966,7 +1116,14 @@ export const getInvoiceById = (id: string): InvoiceWithDetails | null => {
     amount: Number(row[5]),
     verifiedAt: new Date(String(row[6])),
   }));
-  return { ...invoice, customer, items: itemsWithTaxes, taxes, statusHistory, paymentTransactions };
+  return {
+    ...invoice,
+    customer,
+    items: itemsWithTaxes,
+    taxes,
+    statusHistory,
+    paymentTransactions,
+  };
 };
 
 export const getInvoiceByShareToken = (
@@ -1100,7 +1257,9 @@ export const updateInvoice = async (
     data.status === "paid" &&
     existing.paymentMethod === "Fonepay"
   ) {
-    throw new Error("Fonepay payments must be verified before marking the invoice paid.");
+    throw new Error(
+      "Fonepay payments must be verified before marking the invoice paid.",
+    );
   }
 
   if (data.status && data.status !== existing.status) {
@@ -1210,10 +1369,10 @@ export const updateInvoice = async (
     data.fonepayQrType ?? existing.fonepayQrType,
     data.fonepayQrData ?? existing.fonepayQrData,
   );
-  const qrTotalChanged =
-    nextFonepay.paymentMethod === "Fonepay" &&
+  const qrTotalChanged = nextFonepay.paymentMethod === "Fonepay" &&
     nextFonepay.fonepayQrType === "dynamic" &&
-    Math.round(Number(totals.total) * 100) !== Math.round(Number(existing.total) * 100);
+    Math.round(Number(totals.total) * 100) !==
+      Math.round(Number(existing.total) * 100);
   if (qrTotalChanged) {
     nextFonepay.fonepayQrData = undefined;
   }
@@ -1263,7 +1422,10 @@ export const updateInvoice = async (
         nextFonepay.fonepayQrType ?? null,
         nextFonepay.fonepayQrData ?? null,
         nextFonepay.paymentMethod === "Fonepay"
-          ? String(data.fonepayBillId ?? existing.fonepayBillId ?? existing.invoiceNumber).trim()
+          ? String(
+            data.fonepayBillId ?? existing.fonepayBillId ??
+              existing.invoiceNumber,
+          ).trim()
           : null,
         nextFonepay.paymentMethod === "Fonepay" ? totals.total : null,
         updatedAt,
@@ -1741,7 +1903,9 @@ function mapRowToInvoice(row: unknown[]): Invoice {
     paymentTerms: row[13] as string,
     notes: row[14] as string,
     paymentMethod: row[15] ? String(row[15]) : undefined,
-    fonepayQrType: row[16] === "static" || row[16] === "dynamic" ? row[16] : undefined,
+    fonepayQrType: row[16] === "static" || row[16] === "dynamic"
+      ? row[16]
+      : undefined,
     fonepayQrData: row[17] ? String(row[17]) : undefined,
     fonepayBillId: row[18] ? String(row[18]) : undefined,
     fonepayQrAmount: row[19] == null ? undefined : Number(row[19]),

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import "@fontsource-variable/inter/wght.css";
-  import { Barcode, CreditCard, LayoutDashboard, LogOut, Ellipsis, Package, ReceiptText, Settings, UserCog, Users } from "lucide-svelte";
+  import { BarChart3, Barcode, CreditCard, LayoutDashboard, LogOut, Ellipsis, Package, ReceiptText, Settings, UserCog, Users } from "lucide-svelte";
   import Breadcrumbs from "$lib/components/Breadcrumbs.svelte";
   import "./layout.css";
   import DemoAlert from "$lib/components/DemoAlert.svelte";
@@ -133,6 +133,14 @@
                         </a>
                       </li>
                     {/if}
+                    {#if canViewInvoices}
+                      <li>
+                        <a href="/reports">
+                          <BarChart3 size={16} />
+                          {t("Reports")}
+                        </a>
+                      </li>
+                    {/if}
                     {#if canViewFonepay}
                       <li>
                         <a href="/fonepay">
@@ -209,6 +217,14 @@
                     <a href="/settings">
                       <Settings size={16} />
                       {t("Settings")}
+                    </a>
+                  </li>
+                {/if}
+                {#if canViewInvoices}
+                  <li>
+                    <a href="/reports">
+                      <BarChart3 size={16} />
+                      {t("Reports")}
                     </a>
                   </li>
                 {/if}

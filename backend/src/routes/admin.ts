@@ -4,6 +4,7 @@ import {
   createInvoice,
   deleteInvoice,
   duplicateInvoice,
+  getInvoiceAudit,
   getInvoiceById,
   getInvoices,
   getLatestPaidPaymentMethods,
@@ -84,8 +85,8 @@ import {
 } from "../utils/logoStorage.ts";
 import {
   getAuthUser,
-  requireAdminAuth,
   requireAdmin,
+  requireAdminAuth,
   requirePermission,
 } from "../middleware/auth.ts";
 import {
@@ -405,6 +406,9 @@ adminRoutes.use("/admin/*", requireAdminAuth);
 // Protect export routes
 adminRoutes.use("/export/*", requireAdminAuth);
 
+// Protect report routes
+adminRoutes.use("/reports/*", requireAdminAuth);
+
 // Demo helper: trigger an immediate reset (only effective when DEMO_MODE=true)
 adminRoutes.post("/admin/demo/reset", async (c) => {
   if (!DEMO_MODE) return c.json({ error: "Demo mode is not enabled" }, 400);
@@ -541,6 +545,20 @@ adminRoutes.delete(
       return c.json({ success: true });
     } catch (e) {
       return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+
+// Fiscal-year audit trail: every invoice with items, status history and payments
+adminRoutes.get(
+  "/reports/audit",
+  requirePermission("invoices", "read"),
+  (c) => {
+    try {
+      const audit = getInvoiceAudit();
+      return c.json(audit);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
     }
   },
 );
@@ -1135,7 +1153,9 @@ adminRoutes.post(
     try {
       const form = await c.req.formData();
       const entry = form.get("file");
-      if (!(entry instanceof File)) return c.json({ error: "Missing file" }, 400);
+      if (!(entry instanceof File)) {
+        return c.json({ error: "Missing file" }, 400);
+      }
       const qrPath = await saveUploadedLogoFile(entry);
       await setSetting("fonepayStaticQr", qrPath);
       return c.json({ fonepayStaticQr: qrPath });
@@ -1152,26 +1172,47 @@ adminRoutes.put(
     const id = c.req.param("id");
     const body = await c.req.json();
     const image = typeof body?.image === "string" ? body.image.trim() : "";
-    const qrMessage = typeof body?.qrMessage === "string" ? body.qrMessage.trim() : "";
-    if (!qrMessage || !/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(image) || image.length > 1_000_000) {
+    const qrMessage = typeof body?.qrMessage === "string"
+      ? body.qrMessage.trim()
+      : "";
+    if (
+      !qrMessage ||
+      !/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(image) ||
+      image.length > 1_000_000
+    ) {
       return c.json({ error: "A valid Fonepay QR image is required" }, 400);
     }
     const invoice = getInvoiceById(id);
     if (!invoice) return c.json({ error: "Invoice not found" }, 404);
-    if (invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic") {
-      return c.json({ error: "Invoice is not configured for a dynamic Fonepay QR" }, 400);
+    if (
+      invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic"
+    ) {
+      return c.json({
+        error: "Invoice is not configured for a dynamic Fonepay QR",
+      }, 400);
     }
-    if (invoice.fonepayQrData) return c.json({ error: "Fonepay QR is already stored" }, 409);
+    if (invoice.fonepayQrData) {
+      return c.json({ error: "Fonepay QR is already stored" }, 409);
+    }
     const db = (await import("../database/init.ts")).getDatabase();
     const payloadRows = db.query(
       "SELECT qr_message, amount, bill_id FROM fonepay_qr_payloads WHERE invoice_id = ?",
       [id],
     ) as unknown[][];
     const payload = payloadRows[0];
-    if (!payload || String(payload[0]) !== qrMessage || Math.round(Number(payload[1]) * 100) !== Math.round(Number(invoice.total) * 100) || String(payload[2]) !== String(invoice.fonepayBillId || invoice.invoiceNumber)) {
+    if (
+      !payload || String(payload[0]) !== qrMessage ||
+      Math.round(Number(payload[1]) * 100) !==
+        Math.round(Number(invoice.total) * 100) ||
+      String(payload[2]) !==
+        String(invoice.fonepayBillId || invoice.invoiceNumber)
+    ) {
       return c.json({ error: "QR payload does not match this invoice" }, 409);
     }
-    db.query("UPDATE invoices SET fonepay_qr_data = ?, fonepay_qr_amount = ?, updated_at = ? WHERE id = ? AND fonepay_qr_data IS NULL", [image, invoice.total, new Date(), id]);
+    db.query(
+      "UPDATE invoices SET fonepay_qr_data = ?, fonepay_qr_amount = ?, updated_at = ? WHERE id = ? AND fonepay_qr_data IS NULL",
+      [image, invoice.total, new Date(), id],
+    );
     return c.json({ ok: true });
   },
 );
@@ -1184,13 +1225,22 @@ adminRoutes.post(
     try {
       const invoice = getInvoiceById(id);
       if (!invoice) return c.json({ error: "Invoice not found" }, 404);
-      if (invoice.paymentMethod !== "Fonepay" || invoice.fonepayQrType !== "dynamic") {
-        return c.json({ error: "Invoice is not configured for a dynamic Fonepay QR" }, 400);
+      if (
+        invoice.paymentMethod !== "Fonepay" ||
+        invoice.fonepayQrType !== "dynamic"
+      ) {
+        return c.json({
+          error: "Invoice is not configured for a dynamic Fonepay QR",
+        }, 400);
       }
-      const billId = String(invoice.fonepayBillId || invoice.invoiceNumber || "").trim();
+      const billId = String(
+        invoice.fonepayBillId || invoice.invoiceNumber || "",
+      ).trim();
       const amount = Number(invoice.total);
       if (!billId || !Number.isFinite(amount) || amount <= 0) {
-        return c.json({ error: "Invoice has no valid Fonepay reference or amount" }, 400);
+        return c.json({
+          error: "Invoice has no valid Fonepay reference or amount",
+        }, 400);
       }
       const db = (await import("../database/init.ts")).getDatabase();
       const existingPayload = db.query(
@@ -1230,7 +1280,10 @@ adminRoutes.post(
       });
     } catch (e) {
       const msg = String(e);
-      return c.json({ error: msg }, /Fonepay|gateway|credentials|terminal/i.test(msg) ? 502 : 400);
+      return c.json(
+        { error: msg },
+        /Fonepay|gateway|credentials|terminal/i.test(msg) ? 502 : 400,
+      );
     }
   },
 );
@@ -1245,12 +1298,17 @@ adminRoutes.post(
       const amount = Number(body?.amount);
       const billId = typeof body?.billId === "string" ? body.billId.trim() : "";
       if (!Number.isFinite(amount) || amount <= 0 || !billId) {
-        return c.json({ error: "A positive amount and bill ID are required" }, 400);
+        return c.json(
+          { error: "A positive amount and bill ID are required" },
+          400,
+        );
       }
       return c.json(await generateFonepayQr(amount, billId));
     } catch (e) {
       const msg = String(e);
-      if (/Fonepay|gateway|credentials|terminal/i.test(msg)) return c.json({ error: msg }, 502);
+      if (/Fonepay|gateway|credentials|terminal/i.test(msg)) {
+        return c.json({ error: msg }, 502);
+      }
       return c.json({ error: msg }, 400);
     }
   },
@@ -1270,7 +1328,9 @@ adminRoutes.post(
     }
 
     const password = await decryptFonepaySecret(encryptedPassword);
-    if (!password) return c.json({ error: "Stored Fonepay credentials are invalid" }, 500);
+    if (!password) {
+      return c.json({ error: "Stored Fonepay credentials are invalid" }, 500);
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -1298,11 +1358,16 @@ adminRoutes.post(
         // Upstream gateways may return HTML or plain text for 403/502 responses.
       }
       if (!response.ok || !result?.isSuccess || !result?.accessToken) {
-        console.error("Fonepay upstream login rejected or returned invalid response", {
-          status: response.status,
-          message: typeof result?.message === "string" ? result.message : undefined,
-          contentType: response.headers.get("content-type") || undefined,
-        });
+        console.error(
+          "Fonepay upstream login rejected or returned invalid response",
+          {
+            status: response.status,
+            message: typeof result?.message === "string"
+              ? result.message
+              : undefined,
+            contentType: response.headers.get("content-type") || undefined,
+          },
+        );
         const message = response.status === 403
           ? "Fonepay gateway is blocking the Invio server"
           : response.status >= 500
