@@ -1,6 +1,11 @@
 import type { RequestHandler } from "./$types";
 import { redirect } from "@sveltejs/kit";
-import { BACKEND_URL, SESSION_COOKIE, DEFAULT_SESSION_MAX_AGE } from "$lib/backend";
+import {
+  BACKEND_URL,
+  SESSION_COOKIE,
+  DEFAULT_SESSION_MAX_AGE,
+} from "$lib/backend";
+import { postLoginPath } from "$lib/cashier";
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
   const error = url.searchParams.get("error");
@@ -43,5 +48,15 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
     maxAge: data.expiresIn ?? DEFAULT_SESSION_MAX_AGE,
   });
 
-  throw redirect(303, "/dashboard");
+  let destination = "/dashboard";
+  try {
+    const userResponse = await fetch(`${BACKEND_URL}/api/v1/users/me`, {
+      headers: { Authorization: `Bearer ${data.token}` },
+    });
+    if (userResponse.ok) destination = postLoginPath(await userResponse.json());
+  } catch {
+    // Keep the safe dashboard fallback if the user lookup is unavailable.
+  }
+
+  throw redirect(303, destination);
 };

@@ -132,10 +132,21 @@
     if (typeof code === "string") queueHardwareScan(code);
   }
 
+  function handleNewSale() {
+    scannerInput = "";
+    searchInput = "";
+    error = "";
+    requestAnimationFrame(() => scanner?.focus());
+  }
+
   onMount(() => {
     window.addEventListener("invio:hardware-scan", handleGlobalHardwareScan);
+    window.addEventListener("invio:new-sale", handleNewSale);
     scanner?.focus();
-    return () => window.removeEventListener("invio:hardware-scan", handleGlobalHardwareScan);
+    return () => {
+      window.removeEventListener("invio:hardware-scan", handleGlobalHardwareScan);
+      window.removeEventListener("invio:new-sale", handleNewSale);
+    };
   });
 </script>
 

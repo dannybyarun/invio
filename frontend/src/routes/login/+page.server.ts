@@ -7,13 +7,13 @@ import {
 } from "$lib/backend";
 import { getDemoMode } from "$lib/demo";
 import { env } from "$env/dynamic/private";
+import { postLoginPath } from "$lib/cashier";
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   if (locals.user) {
-    throw redirect(303, "/dashboard");
+    throw redirect(303, postLoginPath(locals.user));
   }
-  const oidcEnabled =
-    (env.OIDC_ENABLED || "false").toLowerCase() === "true";
+  const oidcEnabled = (env.OIDC_ENABLED || "false").toLowerCase() === "true";
   const urlError = url.searchParams.get("error");
   return {
     oidcEnabled,
@@ -165,7 +165,18 @@ export const actions: Actions = {
       maxAge: data.expiresIn ?? DEFAULT_SESSION_MAX_AGE,
     });
 
-    throw redirect(303, "/dashboard");
+    let destination = "/dashboard";
+    try {
+      const userResponse = await fetch(`${BACKEND_URL}/api/v1/users/me`, {
+        headers: { Authorization: `Bearer ${data.token}` },
+      });
+      if (userResponse.ok)
+        destination = postLoginPath(await userResponse.json());
+    } catch {
+      // Keep the safe dashboard fallback if the user lookup is unavailable.
+    }
+
+    throw redirect(303, destination);
   },
 
   oidcLogin: async () => {
