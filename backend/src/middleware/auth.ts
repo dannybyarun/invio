@@ -3,6 +3,7 @@ import { verifyJWT } from "../utils/jwt.ts";
 import type { JWTPayload } from "../utils/jwt.ts";
 import type { Action, Resource, UserWithPermissions } from "../types/index.ts";
 import { getDatabase } from "../database/init.ts";
+import { isSessionActive } from "../utils/sessions.ts";
 
 // ---- Context helpers ----
 
@@ -98,6 +99,12 @@ export async function requireAuth(c: Context, next: Next) {
 
   const payload: JWTPayload | null = await verifyJWT(token);
   if (!payload) return unauthorized();
+
+  // New sessions are revocable. Legacy tokens remain valid until expiry while
+  // installations migrate to the server-backed session table.
+  if (payload.jti && !isSessionActive(payload.jti, payload.userId)) {
+    return unauthorized("Session expired or revoked");
+  }
 
   const user = loadUserWithPermissions(payload.userId, payload.username);
   if (!user || !user.isActive) {

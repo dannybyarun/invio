@@ -4,6 +4,7 @@ import { hashPassword } from "../utils/password.ts";
 import { generateUUID } from "../utils/uuid.ts";
 import { RESOURCE_ACTIONS } from "../types/index.ts";
 import type { Action, Resource } from "../types/index.ts";
+import { pruneDatabaseBackups } from "../utils/backupRetention.ts";
 
 let db: DB | undefined;
 
@@ -217,6 +218,38 @@ function ensureInvoiceItemColumns(database: DB): void {
     "invoice_items",
     "product_id",
     "TEXT REFERENCES products(id)",
+  );
+}
+
+function ensureSecurityTables(database: DB): void {
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      jti TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT
+    )
+  `);
+  database.execute(
+    "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at)",
+  );
+  database.execute(`
+    CREATE TABLE IF NOT EXISTS security_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      username TEXT,
+      ip_address TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+  database.execute(
+    "CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at)",
+  );
+  database.execute(
+    "CREATE INDEX IF NOT EXISTS idx_security_events_user ON security_events(user_id, created_at)",
   );
 }
 
@@ -570,7 +603,9 @@ function backfillCompletedInvoicePayments(database: DB): void {
   }
 
   if (repaired > 0) {
-    console.log(`  Reconciled payment records for ${repaired} completed invoice(s).`);
+    console.log(
+      `  Reconciled payment records for ${repaired} completed invoice(s).`,
+    );
   }
 }
 
@@ -817,27 +852,26 @@ function ensureBusinessExtras(database: DB): void {
 }
 
 function ensureSchemaUpgrades(database: DB): void {
+  ensureCustomerColumns(database);
+  backfillCustomerNumbers(database);
+  ensureInvoiceColumns(database);
+  ensureTaxTables(database);
+  ensureProductTables(database);
+  seedProductDefaults(database);
+  migrateInvoicesForVoided(database);
+  ensureInvoiceItemColumns(database);
+  ensureUserColumns(database);
+  // Security tables are required for new session issuance and must not be
+  // silently skipped; startup should fail rather than accept broken auth.
+  ensureSecurityTables(database);
+  ensureFonepayQrPayloadTable(database);
+  ensurePaymentTransactionsTable(database);
+  ensureStatusHistoryTable(database);
+  ensureBusinessExtras(database);
   try {
-    ensureCustomerColumns(database);
-    backfillCustomerNumbers(database);
-    ensureInvoiceColumns(database);
-    ensureTaxTables(database);
-    ensureProductTables(database);
-    seedProductDefaults(database);
-    migrateInvoicesForVoided(database);
-    ensureInvoiceItemColumns(database);
-    ensureUserColumns(database);
-    ensureFonepayQrPayloadTable(database);
-    ensurePaymentTransactionsTable(database);
-    ensureStatusHistoryTable(database);
-    ensureBusinessExtras(database);
-    try {
-      backfillCompletedInvoicePayments(database);
-    } catch (error) {
-      console.error("Completed invoice payment reconciliation failed:", error);
-    }
-  } catch (e) {
-    console.warn("Schema upgrade check failed:", e);
+    backfillCompletedInvoicePayments(database);
+  } catch (error) {
+    console.error("Completed invoice payment reconciliation failed:", error);
   }
 }
 
@@ -987,6 +1021,10 @@ export async function initDatabase(): Promise<void> {
   ensureSchemaUpgrades(db);
   await seedAdminUser(db);
   storeSchemaVersion(db);
+  pruneDatabaseBackups(
+    dbPath,
+    Number(getEnv("BACKUP_RETENTION_COUNT", "10")) || 10,
+  );
 
   console.log("Database initialized successfully");
 }

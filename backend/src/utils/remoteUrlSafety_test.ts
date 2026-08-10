@@ -42,11 +42,13 @@ Deno.test("blocks IPv6 loopback, ULA, link-local, and mapped loopback", () => {
 });
 
 Deno.test("blocks alternate IPv4 literal spellings after URL normalization", async () => {
-  for (const raw of [
-    "https://2130706433/manifest.yaml",
-    "https://0177.0.0.1/manifest.yaml",
-    "https://0x7f.0.0.1/manifest.yaml",
-  ]) {
+  for (
+    const raw of [
+      "https://2130706433/manifest.yaml",
+      "https://0177.0.0.1/manifest.yaml",
+      "https://0x7f.0.0.1/manifest.yaml",
+    ]
+  ) {
     await expectRejected(
       assertSafeRemoteUrl(raw, "manifest URL"),
       "host is not allowed",
@@ -55,7 +57,10 @@ Deno.test("blocks alternate IPv4 literal spellings after URL normalization", asy
 });
 
 Deno.test("allows a public IPv4 literal without DNS lookup", async () => {
-  const url = await assertSafeRemoteUrl("https://1.1.1.1/manifest.yaml", "manifest URL");
+  const url = await assertSafeRemoteUrl(
+    "https://1.1.1.1/manifest.yaml",
+    "manifest URL",
+  );
   if (url.hostname !== "1.1.1.1") {
     throw new Error(`Unexpected normalized hostname: ${url.hostname}`);
   }
@@ -98,17 +103,25 @@ Deno.test("rejects non-HTTPS URLs and embedded credentials", async () => {
     "must use https",
   );
   await expectRejected(
-    assertSafeRemoteUrl("https://user:pass@1.1.1.1/manifest.yaml", "manifest URL"),
+    assertSafeRemoteUrl(
+      "https://user:pass@1.1.1.1/manifest.yaml",
+      "manifest URL",
+    ),
     "must not contain credentials",
   );
 });
 
-async function expectRejected(operation: Promise<unknown>, expected: string): Promise<void> {
+async function expectRejected(
+  operation: Promise<unknown>,
+  expected: string,
+): Promise<void> {
   try {
     await operation;
   } catch (error) {
     if (String(error).includes(expected)) return;
-    throw new Error(`Expected error containing ${expected}, got ${String(error)}`);
+    throw new Error(
+      `Expected error containing ${expected}, got ${String(error)}`,
+    );
   }
   throw new Error(`Expected operation to reject with ${expected}`);
 }

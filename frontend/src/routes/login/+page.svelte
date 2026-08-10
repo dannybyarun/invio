@@ -48,11 +48,7 @@
               };
             }}
           >
-            <button
-              class="btn btn-outline w-full mb-4"
-              type="submit"
-              disabled={oidcLoading || isLoading}
-            >
+            <button class="btn btn-outline mb-4 w-full" type="submit" disabled={oidcLoading || isLoading}>
               {#if oidcLoading}
                 <span class="loading loading-spinner"></span>
               {/if}

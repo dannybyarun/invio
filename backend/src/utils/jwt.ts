@@ -8,6 +8,7 @@ export interface JWTPayload {
   isAdmin: boolean;
   iat?: number;
   exp?: number;
+  jti?: string;
 }
 
 function validateSecret(secretKey: string) {

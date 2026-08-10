@@ -29,6 +29,8 @@ import {
   type OidcClaims,
 } from "../utils/oidc.ts";
 import { getDatabase } from "../database/init.ts";
+import { createSession, revokeSession } from "../utils/sessions.ts";
+import { recordSecurityEvent } from "../utils/securityAudit.ts";
 
 function getSessionTtlSeconds(): number {
   const parsed = parseInt(Deno.env.get("SESSION_TTL_SECONDS") || "3600", 10);
@@ -62,12 +64,15 @@ async function issueSessionToken(c: {
 }) {
   const sessionTtl = getSessionTtlSeconds();
   const now = Math.floor(Date.now() / 1000);
+  const exp = now + sessionTtl;
+  const jti = createSession(c.id, exp);
   const token = await createJWT({
     userId: c.id,
     username: c.username,
     isAdmin: c.isAdmin,
     iat: now,
-    exp: now + sessionTtl,
+    exp,
+    jti,
   });
   return { token, expiresIn: sessionTtl };
 }
@@ -99,9 +104,9 @@ async function issueTwoFactorChallengeToken(c: {
 function validateTwoFactorChallengePayload(payload: Record<string, unknown>):
   | { valid: true; jti: string; userId: string }
   | {
-      valid: false;
-      error: string;
-    } {
+    valid: false;
+    error: string;
+  } {
   if (payload.kind !== "2fa_login") {
     return { valid: false, error: "Invalid 2FA token" };
   }
@@ -195,7 +200,39 @@ authRoutes.post("/auth/login", async (c) => {
   }
 
   const session = await issueSessionToken(user);
+  recordSecurityEvent("login.success", {
+    userId: user.id,
+    username: user.username,
+    ipAddress: clientIp,
+  });
   return c.json(session);
+});
+
+authRoutes.post("/auth/logout", async (c) => {
+  const auth = c.req.header("authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (token) {
+    const payload = await verifyJWTPayload(token);
+    if (payload) {
+      const userId = typeof payload.userId === "string"
+        ? payload.userId
+        : undefined;
+      const username = typeof payload.username === "string"
+        ? payload.username
+        : undefined;
+      const jti = typeof payload.jti === "string" ? payload.jti : "";
+      if (jti) revokeSession(jti);
+      recordSecurityEvent("logout", {
+        userId: userId && userId !== "__legacy__" ? userId : undefined,
+        username,
+        ipAddress: getClientIp(
+          c.req.raw.headers,
+          getRateLimitConfig().trustProxy,
+        ),
+      });
+    }
+  }
+  return c.json({ success: true });
 });
 
 authRoutes.post("/auth/verify-2fa", async (c) => {
@@ -234,8 +271,9 @@ authRoutes.post("/auth/verify-2fa", async (c) => {
 
   // Rate-limit by IP + userId to block brute-force of TOTP codes
   const rateLimitCheck = isRateLimited(clientIp, parsed.userId);
-  if (rateLimitCheck.limited)
+  if (rateLimitCheck.limited) {
     return createRateLimitResponse(rateLimitCheck.retryAfter);
+  }
 
   const user = getUserById(parsed.userId);
   if (!user || !user.isActive || !user.twoFactorEnabled) {
@@ -255,6 +293,11 @@ authRoutes.post("/auth/verify-2fa", async (c) => {
   markChallengeAsUsed(parsed.jti);
   resetRateLimit(clientIp, parsed.userId);
   const session = await issueSessionToken(user);
+  recordSecurityEvent("login.success.2fa", {
+    userId: user.id,
+    username: user.username,
+    ipAddress: clientIp,
+  });
   return c.json(session);
 });
 
@@ -293,8 +336,9 @@ authRoutes.post("/auth/recover-2fa", async (c) => {
 
   // Rate-limit by IP + userId to block brute-force of recovery codes
   const rateLimitCheck = isRateLimited(clientIp, parsed.userId);
-  if (rateLimitCheck.limited)
+  if (rateLimitCheck.limited) {
     return createRateLimitResponse(rateLimitCheck.retryAfter);
+  }
 
   const user = getUserById(parsed.userId);
   if (!user || !user.isActive || !user.twoFactorEnabled) {
@@ -311,6 +355,11 @@ authRoutes.post("/auth/recover-2fa", async (c) => {
   markChallengeAsUsed(parsed.jti);
   resetRateLimit(clientIp, parsed.userId);
   const session = await issueSessionToken(user);
+  recordSecurityEvent("login.success.recovery", {
+    userId: user.id,
+    username: user.username,
+    ipAddress: clientIp,
+  });
   return c.json(session);
 });
 
@@ -367,7 +416,11 @@ authRoutes.post("/auth/oidc/callback", async (c) => {
     if (rows.length > 0) {
       db.query(
         "UPDATE users SET oidc_subject = ?, updated_at = ? WHERE id = ?",
-        [claims.sub, new Date().toISOString(), String((rows[0] as unknown[])[0])],
+        [
+          claims.sub,
+          new Date().toISOString(),
+          String((rows[0] as unknown[])[0]),
+        ],
       );
     }
   }
@@ -390,7 +443,9 @@ authRoutes.post("/auth/oidc/callback", async (c) => {
     let username = baseUsername;
     let attempt = 0;
     while (
-      (db.query("SELECT id FROM users WHERE username = ?", [username]) as unknown[][]).length > 0
+      (db.query("SELECT id FROM users WHERE username = ?", [
+        username,
+      ]) as unknown[][]).length > 0
     ) {
       attempt++;
       username = `${baseUsername}_${attempt}`;
@@ -429,6 +484,7 @@ authRoutes.post("/auth/oidc/callback", async (c) => {
   }
 
   const session = await issueSessionToken({ id: userId, username, isAdmin });
+  recordSecurityEvent("login.success.oidc", { userId, username });
   return c.json(session);
 });
 

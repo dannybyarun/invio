@@ -1,7 +1,11 @@
 import NepaliDate from "nepali-date-converter";
 
 export function isNepaliLocale(locale?: string): boolean {
-  return String(locale || "").toLowerCase().split("-")[0] === "ne";
+  return (
+    String(locale || "")
+      .toLowerCase()
+      .split("-")[0] === "ne"
+  );
 }
 
 export function numberFormatLocale(
@@ -42,22 +46,31 @@ export function formatDateWithBs(
   options?: Intl.DateTimeFormatOptions,
 ): string {
   if (!value) return "";
-  const date = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
-    ? (() => {
-        const [year, month, day] = value.split("-").map(Number);
-        return new Date(year, month - 1, day);
-      })()
-    : typeof value === "string"
-      ? new Date(value)
-      : value;
+  const date =
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? (() => {
+          const [year, month, day] = value.split("-").map(Number);
+          return new Date(year, month - 1, day);
+        })()
+      : typeof value === "string"
+        ? new Date(value)
+        : value;
   if (Number.isNaN(date.getTime())) return "";
 
   const isNepali = isNepaliLocale(locale);
   const activeLocale = isNepali ? "ne-NP" : locale || "en-US";
-  const gregorian = formatGregorianDate(date, activeLocale, dateFormat, options);
+  const gregorian = formatGregorianDate(
+    date,
+    activeLocale,
+    dateFormat,
+    options,
+  );
 
   try {
-    const bs = new NepaliDate(date).format("YYYY-MM-DD", isNepali ? "np" : "en");
+    const bs = new NepaliDate(date).format(
+      "YYYY-MM-DD",
+      isNepali ? "np" : "en",
+    );
     return `${gregorian} (${isNepali ? "वि.सं." : "BS"} ${bs})`;
   } catch {
     // The converter has a finite supported range. Never hide the AD date.

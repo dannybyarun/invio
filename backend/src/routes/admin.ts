@@ -176,6 +176,11 @@ import {
 } from "../controllers/users.ts";
 import { RESOURCE_ACTIONS, RESOURCES } from "../types/index.ts";
 import {
+  getSecurityEvents,
+  recordSecurityEvent,
+} from "../utils/securityAudit.ts";
+import { revokeUserSessions } from "../utils/sessions.ts";
+import {
   createPendingTwoFactorSetup,
   decryptFonepaySecret,
   decryptTwoFactorSecret,
@@ -789,6 +794,11 @@ adminRoutes.post("/backup/restore", requireAdminAuth, async (c) => {
         500,
       );
     }
+    recordSecurityEvent("database.restore", {
+      userId: getAuthUser(c).id,
+      username: getAuthUser(c).username,
+      metadata: { databasePath: dbPath },
+    });
     return c.json({ success: true, message: "Database restored successfully" });
   } catch (e) {
     return c.json({ error: String(e) }, 500);
@@ -2765,6 +2775,17 @@ adminRoutes.get("/users/permissions-schema", (c) => {
   });
 });
 
+// Security event audit feed (admin-only; metadata excludes secrets)
+adminRoutes.get(
+  "/security/events",
+  requireAdminAuth,
+  requireAdmin,
+  (c) => {
+    const limit = Number(c.req.query("limit") || "200");
+    return c.json(getSecurityEvents(Number.isFinite(limit) ? limit : 200));
+  },
+);
+
 // GET /users — list all users
 adminRoutes.get("/users", requireAdmin, (c) => {
   const users = listUsers();
@@ -2786,6 +2807,11 @@ adminRoutes.post("/users", requireAdmin, async (c) => {
     }
 
     const user = await createUserCtrl(data);
+    recordSecurityEvent("user.created", {
+      userId: getAuthUser(c).id,
+      username: getAuthUser(c).username,
+      metadata: { targetUserId: user.id, targetUsername: user.username },
+    });
     return c.json(user, 201);
   } catch (e) {
     const msg = String(e);
@@ -2829,6 +2855,17 @@ adminRoutes.put(
       }
 
       const user = await updateUserCtrl(id, data);
+      if (data.password || data.isActive === false) revokeUserSessions(id);
+      recordSecurityEvent("user.updated", {
+        userId: currentUser.id,
+        username: currentUser.username,
+        metadata: {
+          targetUserId: id,
+          passwordChanged: Boolean(data.password),
+          activeChanged: data.isActive !== undefined,
+          permissionsChanged: data.permissions !== undefined,
+        },
+      });
       return c.json(user);
     } catch (e) {
       const msg = String(e);
@@ -2844,6 +2881,13 @@ adminRoutes.delete("/users/:id", requireAdmin, (c) => {
   const id = c.req.param("id");
   try {
     deleteUserCtrl(id);
+    revokeUserSessions(id);
+    const currentUser = getAuthUser(c);
+    recordSecurityEvent("user.deleted", {
+      userId: currentUser.id,
+      username: currentUser.username,
+      metadata: { targetUserId: id },
+    });
     return c.json({ success: true });
   } catch (e) {
     const msg = String(e);

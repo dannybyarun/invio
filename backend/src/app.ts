@@ -1,15 +1,21 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
-import { initDatabase, resetDatabaseFromDemo } from "./database/init.ts";
+import {
+  getDatabase,
+  initDatabase,
+  resetDatabaseFromDemo,
+} from "./database/init.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { publicRoutes } from "./routes/public.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { logWeasyPrintAvailability } from "./utils/weasyprint.ts";
 import { ensureEnv, getAdminCredentials, getJwtSecret } from "./utils/env.ts";
 
-const SECURE_HEADERS_DISABLED = (Deno.env.get("SECURE_HEADERS_DISABLED") || "").toLowerCase() === "true";
-const HSTS_ENABLED = (Deno.env.get("ENABLE_HSTS") || "").toLowerCase() === "true";
+const SECURE_HEADERS_DISABLED =
+  (Deno.env.get("SECURE_HEADERS_DISABLED") || "").toLowerCase() === "true";
+const HSTS_ENABLED =
+  (Deno.env.get("ENABLE_HSTS") || "").toLowerCase() === "true";
 const CONTENT_SECURITY_POLICY = Deno.env.get("CONTENT_SECURITY_POLICY") ||
   "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'";
 
@@ -19,7 +25,8 @@ const app = new Hono();
 try {
   ensureEnv(["JWT_SECRET", "ADMIN_USER", "ADMIN_PASS"]);
 
-  const { username: adminUsername, password: adminPassword } = getAdminCredentials();
+  const { username: adminUsername, password: adminPassword } =
+    getAdminCredentials();
   if (!adminUsername || adminUsername.trim().length === 0) {
     throw new Error("ADMIN_USER must not be empty");
   }
@@ -93,7 +100,10 @@ app.use("*", async (c, next) => {
     headers.set("Referrer-Policy", "no-referrer");
   }
   if (!headers.has("Permissions-Policy")) {
-    headers.set("Permissions-Policy", "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()");
+    headers.set(
+      "Permissions-Policy",
+      "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+    );
   }
   if (!headers.has("Cross-Origin-Opener-Policy")) {
     headers.set("Cross-Origin-Opener-Policy", "same-origin");
@@ -105,9 +115,13 @@ app.use("*", async (c, next) => {
     headers.set("Content-Security-Policy", CONTENT_SECURITY_POLICY);
   }
   if (HSTS_ENABLED && !headers.has("Strict-Transport-Security")) {
-    const proto = c.req.header("x-forwarded-proto")?.toLowerCase() || (c.req.url.startsWith("https://") ? "https" : "http");
+    const proto = c.req.header("x-forwarded-proto")?.toLowerCase() ||
+      (c.req.url.startsWith("https://") ? "https" : "http");
     if (proto === "https") {
-      headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+      headers.set(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains",
+      );
     }
   }
 });
@@ -121,12 +135,29 @@ app.route("/api/v1", authRoutes);
 app.get("/", (c: Context) => c.redirect("/health"));
 
 app.get("/health", (c: Context) => {
+  return c.json({ status: "ok" }, 200);
+});
+
+// Readiness check: confirms the process is alive and SQLite can answer a query.
+app.get("/ready", (c: Context) => {
   try {
-    // Light DB check via pragma
-    // If the DB is not initialized, initDatabase() above would have thrown.
-    return c.json({ status: "ok" }, 200);
+    const database = getDatabase();
+    database.query("SELECT 1");
+    const requiredTables = ["auth_sessions", "security_events"];
+    const rows = database.query(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${
+        requiredTables.map(() => "?").join(",")
+      })`,
+      requiredTables,
+    ) as unknown[][];
+    const present = new Set(rows.map((row) => String(row[0])));
+    const missing = requiredTables.filter((name) => !present.has(name));
+    if (missing.length > 0) {
+      return c.json({ status: "not_ready", database: "error", missing }, 503);
+    }
+    return c.json({ status: "ready", database: "ok" }, 200);
   } catch (_e) {
-    return c.json({ status: "error" }, 500);
+    return c.json({ status: "not_ready", database: "error" }, 503);
   }
 });
 
