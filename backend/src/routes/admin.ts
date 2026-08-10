@@ -50,6 +50,11 @@ import {
   updateProduct,
 } from "../controllers/products.ts";
 import {
+  importProductsFromWorkbook,
+  productImportTemplate,
+} from "../controllers/productImport.ts";
+import { barcodeToSvg } from "../utils/barcode.ts";
+import {
   createTaxDefinition,
   deleteTaxDefinition,
   getTaxDefinitionById,
@@ -1825,6 +1830,72 @@ adminRoutes.delete(
 );
 
 // Product routes
+adminRoutes.get(
+  "/products/import-template.xlsx",
+  requirePermission("products", "create"),
+  (c) => {
+    return new Response(productImportTemplate(), {
+      headers: {
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition":
+          'attachment; filename="products-import-template.xlsx"',
+        "Cache-Control": "no-store",
+      },
+    });
+  },
+);
+
+adminRoutes.post(
+  "/products/import",
+  requirePermission("products", "create"),
+  async (c) => {
+    try {
+      const contentType = c.req.header("content-type") || "";
+      if (!contentType.includes("multipart/form-data")) {
+        return c.json({
+          error: "Upload an .xlsx file as multipart form field 'file'",
+        }, 400);
+      }
+      const form = await c.req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        return c.json({ error: "No workbook uploaded" }, 400);
+      }
+      if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        return c.json({ error: "Only .xlsx files are supported" }, 400);
+      }
+      const result = importProductsFromWorkbook(
+        new Uint8Array(await file.arrayBuffer()),
+      );
+      return c.json(
+        { created: result.created, errors: result.errors },
+        result.errors.length > 0 ? 207 : 201,
+      );
+    } catch (e) {
+      return c.json({ error: String(e) }, 400);
+    }
+  },
+);
+
+adminRoutes.get(
+  "/products/:id/barcode.svg",
+  requirePermission("products", "read"),
+  (c) => {
+    const product = getProductById(c.req.param("id"));
+    if (!product) return c.json({ error: "Product not found" }, 404);
+    if (!product.barcode) {
+      return c.json({ error: "Product has no barcode" }, 404);
+    }
+    return new Response(barcodeToSvg(product.barcode), {
+      headers: {
+        "Content-Type": "image/svg+xml; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  },
+);
+
 adminRoutes.get("/products", requirePermission("products", "read"), (c) => {
   const url = new URL(c.req.url);
   const includeInactive =

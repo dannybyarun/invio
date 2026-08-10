@@ -218,6 +218,8 @@ CREATE TABLE IF NOT EXISTS products (
 
 CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku_unique ON products(sku COLLATE NOCASE) WHERE sku IS NOT NULL AND trim(sku) <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode_unique ON products(barcode COLLATE NOCASE) WHERE barcode IS NOT NULL AND trim(barcode) <> '';
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { BarChart3, CheckCircle2, Clock3, CreditCard, Download, QrCode, RefreshCw, Search, WalletCards } from "lucide-svelte";
   import { getContext } from "svelte";
+  import { SvelteDate } from "svelte/reactivity";
   import QRCode from "qrcode";
   import { numberFormatLocale } from "$lib/utils/dates";
 
@@ -77,8 +78,8 @@
     success = "";
     try {
       const dates: string[] = [];
-      const cursor = new Date(`${fromDate}T00:00:00Z`);
-      const end = new Date(`${toDate}T00:00:00Z`);
+      const cursor = new SvelteDate(`${fromDate}T00:00:00Z`);
+      const end = new SvelteDate(`${toDate}T00:00:00Z`);
       if (cursor > end) throw new Error(t("The start date must be before the end date"));
       while (cursor <= end && dates.length < 31) {
         dates.push(cursor.toISOString().slice(0, 10));

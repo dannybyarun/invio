@@ -6,6 +6,7 @@
 import { getDatabase } from "../database/init.ts";
 import { CreateProductRequest, Product } from "../types/index.ts";
 import { generateUUID } from "../utils/uuid.ts";
+import { generateInternalEan13 } from "../utils/barcode.ts";
 import {
   applyOpeningStock,
   applyStockAdjustment,
@@ -38,6 +39,23 @@ const toNullable = (v?: string): string | null => {
   const s = String(v).trim();
   return s.length ? s : null;
 };
+
+function generateAvailableBarcode(
+  db: ReturnType<typeof getDatabase>,
+  sku: string | null,
+): string {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = generateInternalEan13();
+    const rows = db.query(
+      `SELECT 1 FROM products WHERE sku = ? COLLATE NOCASE OR barcode = ? COLLATE NOCASE LIMIT 1`,
+      [candidate, candidate],
+    ) as unknown[][];
+    if (rows.length === 0 && sku?.toLowerCase() !== candidate.toLowerCase()) {
+      return candidate;
+    }
+  }
+  throw new Error("Unable to generate a unique barcode");
+}
 
 function assertProductCodesAvailable(
   db: ReturnType<typeof getDatabase>,
@@ -112,7 +130,7 @@ export const createProduct = (data: CreateProductRequest): Product => {
 
   const description = toNullable(data.description);
   const sku = toNullable(data.sku);
-  const barcode = toNullable(data.barcode);
+  const barcode = toNullable(data.barcode) || generateAvailableBarcode(db, sku);
   const unit = toNullable(data.unit) || "piece";
   const category = toNullable(data.category);
   const taxDefinitionId = toNullable(data.taxDefinitionId);
@@ -122,26 +140,37 @@ export const createProduct = (data: CreateProductRequest): Product => {
 
   assertProductCodesAvailable(db, sku, barcode);
 
-  db.query(
-    `INSERT INTO products (id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at, cost_price, quantity_on_hand, reorder_level)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-    [
-      productId,
-      data.name,
-      description,
-      data.unitPrice || 0,
-      sku,
-      barcode,
-      unit,
-      category,
-      taxDefinitionId,
-      now.toISOString(),
-      now.toISOString(),
-      costPrice,
-      quantityOnHand,
-      reorderLevel,
-    ],
-  );
+  try {
+    db.query(
+      `INSERT INTO products (id, name, description, unit_price, sku, barcode, unit, category, tax_definition_id, is_active, created_at, updated_at, cost_price, quantity_on_hand, reorder_level)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+      [
+        productId,
+        data.name,
+        description,
+        data.unitPrice || 0,
+        sku,
+        barcode,
+        unit,
+        category,
+        taxDefinitionId,
+        now.toISOString(),
+        now.toISOString(),
+        costPrice,
+        quantityOnHand,
+        reorderLevel,
+      ],
+    );
+  } catch (error) {
+    const message = String(error);
+    if (
+      /unique constraint failed: products\.barcode/i.test(message) &&
+      !data.barcode
+    ) {
+      return createProduct(data);
+    }
+    throw error;
+  }
 
   if (quantityOnHand > 0) applyOpeningStock(productId, quantityOnHand);
 

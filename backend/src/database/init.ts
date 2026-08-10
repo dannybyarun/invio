@@ -390,6 +390,29 @@ function ensureProductTables(database: DB): void {
   database.execute(
     "CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)",
   );
+  // Enforce identifier uniqueness for new data while allowing multiple legacy
+  // NULL/blank values and avoiding a startup failure on older databases that
+  // may already contain duplicates.
+  try {
+    database.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku_unique ON products(sku COLLATE NOCASE) WHERE sku IS NOT NULL AND trim(sku) <> ''",
+    );
+  } catch (error) {
+    console.warn(
+      "Could not create unique SKU index; existing duplicates may need cleanup:",
+      error,
+    );
+  }
+  try {
+    database.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode_unique ON products(barcode COLLATE NOCASE) WHERE barcode IS NOT NULL AND trim(barcode) <> ''",
+    );
+  } catch (error) {
+    console.warn(
+      "Could not create unique barcode index; existing duplicates may need cleanup:",
+      error,
+    );
+  }
   database.execute(`
     CREATE TABLE IF NOT EXISTS product_categories (
       id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, name TEXT NOT NULL,

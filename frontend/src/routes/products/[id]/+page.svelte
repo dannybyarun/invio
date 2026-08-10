@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import { Pencil, Trash2 } from "lucide-svelte";
+  import { Pencil, Printer, Trash2 } from "lucide-svelte";
   import { enhance } from "$app/forms";
   import type { SubmitFunction } from "@sveltejs/kit";
   import { hasPermission } from "$lib/types";
@@ -49,6 +49,9 @@
     </div>
 
     <div class="flex flex-wrap gap-2">
+      {#if p.barcode}
+        <a href={`/products/barcodes?product=${encodeURIComponent(p.id)}`} class="btn btn-sm btn-outline"><Printer size={16} /> {t("Print barcode")}</a>
+      {/if}
       {#if canUpdate}
         <a href={`/products/${p.id}/edit`} class="btn btn-sm">
           <Pencil size={16} />
@@ -97,7 +100,14 @@
       </div>
       <div>
         <div class="mb-1 text-sm opacity-70">{t("Barcode")}</div>
-        <div class="font-medium">{p.barcode || "-"}</div>
+        {#if p.barcode}
+          <div class="space-y-2">
+            <div class="font-medium">{p.barcode}</div>
+            <img class="h-16 max-w-xs" src={`/api/v1/products/${p.id}/barcode.svg`} alt={`${t("Barcode")} ${p.barcode}`} />
+          </div>
+        {:else}
+          <div class="font-medium">-</div>
+        {/if}
       </div>
       <div>
         <div class="mb-1 text-sm opacity-70">{t("Unit")}</div>

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Download, PackagePlus, TriangleAlert } from "lucide-svelte";
+  import { Download, FileSpreadsheet, PackagePlus, Printer, TriangleAlert, Upload } from "lucide-svelte";
   import { getContext } from "svelte";
-  import { goto } from "$app/navigation";
+  import { goto, invalidateAll } from "$app/navigation";
   import { numberFormatLocale } from "$lib/utils/dates";
   import { hasPermission } from "$lib/types";
   import ScanBarcodeButton from "$lib/components/ScanBarcodeButton.svelte";
@@ -15,6 +15,10 @@
   let canExport = $derived(hasPermission(user, "products", "read"));
   let products = $derived(data.products || []);
   let lowStockCount = $derived(products.filter((p: any) => (Number(p.reorderLevel) || 0) > 0 && (Number(p.quantityOnHand) || 0) <= Number(p.reorderLevel)).length);
+  let importing = $state(false);
+  let importMessage = $state("");
+  let importError = $state("");
+  let importInput = $state<HTMLInputElement | null>(null);
 
   function getProductPrice(p: { unitPrice?: number; unit_price?: number; price?: number }) {
     return Number(p.unitPrice ?? p.unit_price ?? p.price ?? 0);
@@ -39,6 +43,32 @@
     return (Number(p.reorderLevel) || 0) > 0 && (Number(p.quantityOnHand) || 0) <= Number(p.reorderLevel);
   }
 
+  async function importProducts(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    importing = true;
+    importMessage = "";
+    importError = "";
+    try {
+      const body = new FormData();
+      body.set("file", file);
+      const response = await fetch("/api/v1/products/import", { method: "POST", body });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok && response.status !== 207) throw new Error(result.error || t("Product import failed"));
+      const created = Array.isArray(result.created) ? result.created.length : 0;
+      const errors = Array.isArray(result.errors) ? result.errors : [];
+      importMessage = `${t("Imported products")}: ${created}${errors.length ? ` · ${errors.length} ${t("rows skipped")}` : ""}`;
+      if (errors.length) importError = errors.map((error: { row?: number; message?: string }) => `Row ${error.row}: ${error.message}`).join("; ");
+      await invalidateAll();
+    } catch (error) {
+      importError = error instanceof Error ? error.message : String(error);
+    } finally {
+      importing = false;
+      input.value = "";
+    }
+  }
+
   async function handleScan(code: string) {
     const normalized = code.trim();
     if (!normalized) return;
@@ -60,8 +90,17 @@
     {#if canCreate}
       <ScanBarcodeButton onDetected={handleScan} label={t("Scan barcode")} />
     {/if}
+    {#if canCreate}
+      <a href="/api/v1/products/import-template.xlsx" class="btn btn-sm btn-outline" download><FileSpreadsheet size={15} /> {t("Excel template")}</a>
+      <label class="btn btn-sm btn-outline" class:btn-disabled={importing}>
+        {#if importing}<span class="loading loading-spinner loading-xs"></span>{:else}<Upload size={15} />{/if}
+        {t("Import Excel")}
+        <input bind:this={importInput} class="hidden" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange={importProducts} disabled={importing} />
+      </label>
+    {/if}
     {#if canExport}
       <a href="/api/v1/export/products.csv" class="btn btn-sm btn-outline"><Download size={15} /> CSV</a>
+      <a href="/products/barcodes" class="btn btn-sm btn-outline"><Printer size={15} /> {t("Print barcodes")}</a>
     {/if}
     {#if canCreate}
       <a href="/products/new" class="btn btn-sm btn-primary w-full sm:w-auto">
@@ -77,6 +116,8 @@
     <span>{data.error}</span>
   </div>
 {/if}
+{#if importMessage}<div class="alert alert-success mb-3"><span>{importMessage}</span></div>{/if}
+{#if importError}<div class="alert alert-warning mb-3"><span>{importError}</span></div>{/if}
 
 <!-- Mobile List -->
 <div class="block space-y-3 md:hidden">
