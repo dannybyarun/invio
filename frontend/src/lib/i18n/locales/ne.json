@@ -33,6 +33,15 @@
   "Search products, SKU, or barcode": "उत्पादन, SKU वा बारकोड खोज्नुहोस्",
   "Select a customer before completing the sale": "बिक्री पूरा गर्नुअघि ग्राहक छान्नुहोस्",
   "Sale completed successfully": "बिक्री सफलतापूर्वक पूरा भयो",
+  "New sale": "नयाँ बिक्री",
+  "Print receipt": "रसीद प्रिन्ट गर्नुहोस्",
+  "View invoice": "बिल हेर्नुहोस्",
+  "Ready to scan": "स्क्यान गर्न तयार",
+  "Invoice created; payment is pending": "बिल सिर्जना भयो; भुक्तानी बाँकी छ",
+  "Payment pending": "भुक्तानी बाँकी छ",
+  "Scan to pay with Fonepay": "Fonepay बाट भुक्तानी गर्न स्क्यान गर्नुहोस्",
+  "Ask the customer to scan this QR, then check the invoice to verify payment.": "ग्राहकलाई यो QR स्क्यान गर्न लगाउनुहोस्, त्यसपछि भुक्तानी प्रमाणित गर्न बिल जाँच गर्नुहोस्।",
+  "Open invoice to verify": "प्रमाणित गर्न बिल खोल्नुहोस्",
   "Add at least one product to the cart": "कार्टमा कम्तीमा एउटा उत्पादन थप्नुहोस्",
   "Your cart is empty": "तपाईंको कार्ट खाली छ",
   "Branding": "ब्रान्डिङ",
@@ -471,5 +480,11 @@
   "Create a new quote from this one": "यसबाट नयाँ कोट सिर्जना गर्नुहोस्",
   "Failed to re-quote": "पुनः कोट असफल भयो",
   "Barcode filled from scan — add the rest and save.": "बारकोड स्क्यानबाट भरिएको छ — बाँकी थपेर सेभ गर्नुहोस्।",
-  "Only administrators can assign user permissions.": "प्रयोगकर्ता अनुमति केवल प्रशासकहरूले मात्र तोक्न सक्छन्।"
+  "Only administrators can assign user permissions.": "प्रयोगकर्ता अनुमति केवल प्रशासकहरूले मात्र तोक्न सक्छन्।",
+  "Regenerate payment QR": "भुक्तानी QR पुन: उत्पन्न गर्नुहोस्",
+  "Payment QR": "भुक्तानी QR",
+  "Close": "बन्द गर्नुहोस्",
+  "Unable to generate Fonepay QR": "Fonepay QR उत्पन्न गर्न सकिएन",
+  "Fonepay payment QR code": "Fonepay भुक्तानी QR कोड",
+  "Payment received": "भुक्तानी प्राप्त भयो"
 }

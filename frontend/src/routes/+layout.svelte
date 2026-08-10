@@ -75,6 +75,11 @@
       quickSellCart.splice(0, quickSellCart.length);
     },
     open() {
+      globalCompletedInvoiceId = "";
+      globalCompletedInvoiceNumber = "";
+      globalCompletedSaleTotal = 0;
+      globalCompletedPaymentMethod = "Cash";
+      globalCompletedFonepayQrType = "";
       globalCartPromptOpen = true;
       void loadGlobalCheckoutData();
     },
@@ -130,6 +135,29 @@
   let globalSelling = $state(false);
   let globalGeneratedQr = $state("");
   let globalGeneratedInvoiceId = $state("");
+  let globalCompletedInvoiceId = $state("");
+  let globalCompletedInvoiceNumber = $state("");
+  let globalCompletedSaleTotal = $state(0);
+  let globalCompletedPaymentMethod = $state("Cash");
+  let globalCompletedFonepayQrType = $state<"static" | "dynamic" | "">("");
+
+  function startNewGlobalSale() {
+    quickSellCartContext.clear();
+    globalCustomerId = "";
+    globalPaymentMethod = "Cash";
+    globalFonepayQrType = "";
+    globalGeneratedQr = "";
+    globalGeneratedInvoiceId = "";
+    globalCompletedInvoiceId = "";
+    globalCompletedInvoiceNumber = "";
+    globalCompletedSaleTotal = 0;
+    globalCompletedPaymentMethod = "Cash";
+    globalCompletedFonepayQrType = "";
+    globalScanError = "";
+    globalScanMessage = "";
+    globalCartPromptOpen = false;
+    window.dispatchEvent(new CustomEvent("invio:new-sale"));
+  }
 
   $effect(() => {
     const currentOwner = String(authUser?.id || "");
@@ -148,6 +176,11 @@
       globalScanMessage = "";
       globalGeneratedQr = "";
       globalGeneratedInvoiceId = "";
+      globalCompletedInvoiceId = "";
+      globalCompletedInvoiceNumber = "";
+      globalCompletedSaleTotal = 0;
+      globalCompletedPaymentMethod = "Cash";
+      globalCompletedFonepayQrType = "";
     }
     quickSellCartOwner = currentOwner;
   });
@@ -215,6 +248,11 @@
       if (!response.ok) throw new Error(t("No product found for that barcode or SKU"));
       const product = await response.json();
       if (scanOwner !== String(authUser?.id || "")) return;
+      globalCompletedInvoiceId = "";
+      globalCompletedInvoiceNumber = "";
+      globalCompletedSaleTotal = 0;
+      globalCompletedPaymentMethod = "Cash";
+      globalCompletedFonepayQrType = "";
       quickSellCartContext.add(product);
       globalCartPromptOpen = true;
       globalScanMessage = t("Product added to current sale");
@@ -251,6 +289,10 @@
     globalScanError = "";
     globalGeneratedQr = "";
     globalGeneratedInvoiceId = "";
+    globalCompletedInvoiceId = "";
+    globalCompletedInvoiceNumber = "";
+    globalCompletedSaleTotal = 0;
+    globalCompletedPaymentMethod = "Cash";
     let createdInvoiceId = "";
     const wasDynamicFonepay = globalPaymentMethod === "Fonepay" && globalFonepayQrType === "dynamic";
     try {
@@ -260,7 +302,10 @@
         body: JSON.stringify({
           customerId: globalCustomerId,
           currency: globalCurrency,
-          status: globalPaymentMethod === "Fonepay" ? "sent" : "paid",
+          // Static Fonepay QRs are settled at the counter (like cash) and can be
+          // recorded as paid immediately; only dynamic QRs require gateway
+          // verification, so those stay pending until payment is confirmed.
+          status: globalPaymentMethod === "Fonepay" && globalFonepayQrType === "dynamic" ? "sent" : "paid",
           paymentMethod: globalPaymentMethod,
           fonepayQrType: globalPaymentMethod === "Fonepay" ? globalFonepayQrType : undefined,
           discountAmount: 0,
@@ -304,14 +349,19 @@
         globalGeneratedInvoiceId = createdInvoiceId;
       }
 
+      globalCompletedInvoiceId = createdInvoiceId;
+      globalCompletedInvoiceNumber = String(body.invoiceNumber || body.number || createdInvoiceId);
+      globalCompletedSaleTotal = globalSaleTotal;
+      globalCompletedPaymentMethod = globalPaymentMethod;
+      globalCompletedFonepayQrType = globalPaymentMethod === "Fonepay" ? globalFonepayQrType : "";
       quickSellCartContext.clear();
       globalCustomerId = "";
       globalPaymentMethod = "Cash";
       globalFonepayQrType = "";
-      globalCartPromptOpen = wasDynamicFonepay;
-      globalScanMessage = t("Sale completed successfully");
+      globalCartPromptOpen = true;
+      globalScanMessage = "";
       if (!wasDynamicFonepay) {
-        await goto(`/invoices/${createdInvoiceId}`);
+        window.dispatchEvent(new CustomEvent("invio:new-sale"));
       }
     } catch (error) {
       globalScanError = error instanceof Error ? error.message : t("Failed to complete sale");
@@ -737,22 +787,68 @@
             {#if globalScanMessage}<div class="text-success text-sm">{globalScanMessage}</div>{/if}
             {#if globalScanError}<div class="alert alert-error py-2 text-sm"><span>{globalScanError}</span></div>{/if}
             {#if globalGeneratedQr}
-              <div class="space-y-3 text-center">
-                <p class="text-success text-sm">{t("Dynamic Fonepay QR generated successfully")}</p>
-                <img src={globalGeneratedQr} alt={t("Fonepay payment QR code")} class="mx-auto h-48 w-48 rounded bg-white p-2" />
-                <button
-                  type="button"
-                  class="btn btn-primary btn-sm w-full"
-                  onclick={() => {
-                    const invoiceId = globalGeneratedInvoiceId;
-                    globalCartPromptOpen = false;
-                    globalGeneratedQr = "";
-                    globalGeneratedInvoiceId = "";
-                    void goto(`/invoices/${invoiceId}`);
-                  }}
-                >
-                  {t("View Invoice")}
-                </button>
+              <div class="space-y-4 text-center">
+                <div class="rounded-box border-warning/30 bg-warning/10 border p-3">
+                  <div class="text-warning mb-1 text-xs font-bold tracking-wide uppercase">{t("Payment pending")}</div>
+                  <p class="font-semibold">{t("Scan to pay with Fonepay")}</p>
+                  <p class="mt-1 text-sm opacity-70">{t("Invoice")} #{globalCompletedInvoiceNumber}</p>
+                  <p class="text-2xl font-extrabold">{formatGlobalMoney(globalCompletedSaleTotal)}</p>
+                </div>
+                <img src={globalGeneratedQr} alt={t("Fonepay payment QR code")} class="mx-auto h-56 w-56 rounded-xl bg-white p-3 shadow-sm" />
+                <p class="text-xs opacity-70">{t("Ask the customer to scan this QR, then check the invoice to verify payment.")}</p>
+                <div class="grid grid-cols-2 gap-2">
+                  <a class="btn btn-outline btn-sm" href={`/api/v1/invoices/${globalGeneratedInvoiceId}/pdf`} target="_blank">
+                    {t("Print receipt")}
+                  </a>
+                  <button type="button" class="btn btn-primary btn-sm" onclick={startNewGlobalSale}>
+                    {t("New sale")}
+                  </button>
+                </div>
+                <a class="link text-sm" href={`/invoices/${globalGeneratedInvoiceId}`}>{t("Open invoice to verify")}</a>
+              </div>
+            {:else if globalCompletedInvoiceId}
+              <div class="space-y-4 text-center">
+                {#if globalCompletedPaymentMethod === "Fonepay" && globalCompletedFonepayQrType === "dynamic"}
+                  <div class="bg-warning/15 text-warning mx-auto flex h-14 w-14 items-center justify-center rounded-full" aria-hidden="true">
+                    <CreditCard size={28} />
+                  </div>
+                {:else}
+                  <div class="bg-success/15 text-success mx-auto flex h-14 w-14 items-center justify-center rounded-full" aria-hidden="true">
+                    <Check size={30} strokeWidth={3} />
+                  </div>
+                {/if}
+                <div>
+                  {#if globalCompletedPaymentMethod === "Fonepay" && globalCompletedFonepayQrType === "dynamic"}
+                    <p class="text-warning font-semibold">{t("Invoice created; payment is pending")}</p>
+                  {:else}
+                    <p class="text-success font-semibold">{t("Sale completed successfully")}</p>
+                  {/if}
+                  <p class="mt-1 text-sm opacity-70">{t("Invoice")} #{globalCompletedInvoiceNumber}</p>
+                  <p class="mt-1 text-3xl font-extrabold tracking-tight">{formatGlobalMoney(globalCompletedSaleTotal)}</p>
+                  <span class="badge {globalCompletedPaymentMethod === 'Fonepay' && globalCompletedFonepayQrType === 'dynamic' ? 'badge-warning' : 'badge-ghost'} mt-2"
+                    >{globalCompletedPaymentMethod === "Fonepay" && globalCompletedFonepayQrType === "dynamic" ? t("Payment pending") : `${t("Paid with")} ${globalCompletedPaymentMethod}`}</span
+                  >
+                </div>
+                {#if globalCompletedPaymentMethod === "Fonepay" && globalCompletedFonepayQrType === "dynamic"}
+                  <div class="rounded-box border-warning/30 bg-warning/5 border p-3">
+                    <p class="mb-2 text-xs font-semibold">{t("Scan to pay with Fonepay")}</p>
+                    <img src={String(globalSettings.fonepayStaticQr || "/fonepay-static-qr.png")} alt={t("Fonepay payment QR code")} class="mx-auto h-36 w-36 rounded-lg bg-white p-2" />
+                  </div>
+                {/if}
+                <div class="grid grid-cols-2 gap-2">
+                  <a class="btn btn-outline btn-sm" href={`/api/v1/invoices/${globalCompletedInvoiceId}/pdf`} target="_blank">
+                    {t("Print receipt")}
+                  </a>
+                  <button type="button" class="btn btn-primary btn-sm" onclick={startNewGlobalSale}>
+                    {t("New sale")}
+                  </button>
+                </div>
+                <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm">
+                  <a class="link" href={`/api/v1/invoices/${globalCompletedInvoiceId}/html`} target="_blank">{t("View HTML")}</a>
+                  <a class="link" href={`/invoices/${globalCompletedInvoiceId}`}
+                    >{globalCompletedPaymentMethod === "Fonepay" && globalCompletedFonepayQrType === "dynamic" ? t("Open invoice to verify") : t("View invoice")}</a
+                  >
+                </div>
               </div>
             {:else if quickSellCart.length}
               <div class="max-h-48 space-y-2 overflow-y-auto">

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { normalize, relative, resolve } from "std/path";
 import { getInvoiceByShareToken } from "../controllers/invoices.ts";
 import { getSettings } from "../controllers/settings.ts";
+import { generateFonepayQr } from "../utils/fonepay.ts";
 import { buildInvoiceHTML, generatePDF } from "../utils/pdf.ts";
 import { generateUBLInvoiceXML } from "../utils/ubl.ts"; // legacy direct import (will be removed after deprecation window)
 import { generateInvoiceXML, listXMLProfiles } from "../utils/xmlProfiles.ts";
@@ -103,6 +104,75 @@ publicRoutes.get("/public/invoices/:share_token", async (c) => {
     ...publicInvoice
   } = invoice;
   return c.json(publicInvoice);
+});
+
+// Generate (or refresh) the dynamic Fonepay QR payload for a published invoice.
+// Authenticated by the share token, so the public share page can regenerate the
+// QR without logging in. Returns only the raw QR message; the client renders it
+// for display. The image is intentionally NOT persisted from this public
+// endpoint — the authenticated invoice page owns the stored QR image — so a
+// share-token holder cannot overwrite the QR shown on HTML/PDF with arbitrary
+// content. Payment verification matches by bill ID + amount, so a freshly
+// generated message remains verifiable.
+publicRoutes.post("/public/invoices/:share_token/fonepay-qr", async (c) => {
+  const shareToken = c.req.param("share_token");
+  const invoice = await getInvoiceByShareToken(shareToken);
+  if (!invoice) {
+    return c.json({ message: "Invoice not found" }, 404);
+  }
+  if (
+    invoice.paymentMethod !== "Fonepay" ||
+    invoice.fonepayQrType !== "dynamic"
+  ) {
+    return c.json({
+      error: "Invoice is not configured for a dynamic Fonepay QR",
+    }, 400);
+  }
+  const billId = String(
+    invoice.fonepayBillId || invoice.invoiceNumber || "",
+  ).trim();
+  const amount = Number(invoice.total);
+  if (!billId || !Number.isFinite(amount) || amount <= 0) {
+    return c.json({
+      error: "Invoice has no valid Fonepay reference or amount",
+    }, 400);
+  }
+  const db = (await import("../database/init.ts")).getDatabase();
+  const existingPayload = db.query(
+    "SELECT qr_message, amount, bill_id FROM fonepay_qr_payloads WHERE invoice_id = ?",
+    [invoice.id],
+  ) as unknown[][];
+  const stored = existingPayload[0];
+  if (
+    stored &&
+    Math.round(Number(stored[1]) * 100) === Math.round(amount * 100) &&
+    String(stored[2]) === billId &&
+    String(stored[0]).trim()
+  ) {
+    return c.json({ qrMessage: String(stored[0]) });
+  }
+
+  const generated = await generateFonepayQr(amount, billId);
+  db.query(
+    `INSERT INTO fonepay_qr_payloads
+     (invoice_id, qr_message, amount, bill_id, created_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(invoice_id) DO UPDATE SET
+       qr_message = excluded.qr_message,
+       amount = excluded.amount,
+       bill_id = excluded.bill_id,
+       created_at = excluded.created_at
+     WHERE fonepay_qr_payloads.amount != excluded.amount
+        OR fonepay_qr_payloads.bill_id != excluded.bill_id`,
+    [invoice.id, generated.qrMessage, amount, billId, new Date().toISOString()],
+  );
+  const persisted = db.query(
+    "SELECT qr_message FROM fonepay_qr_payloads WHERE invoice_id = ?",
+    [invoice.id],
+  ) as unknown[][];
+  return c.json({
+    qrMessage: String(persisted[0]?.[0] || generated.qrMessage),
+  });
 });
 
 publicRoutes.get("/public/invoices/:share_token/pdf", async (c) => {

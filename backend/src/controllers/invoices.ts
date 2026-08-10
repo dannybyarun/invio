@@ -429,8 +429,13 @@ export const createInvoice = (
     : undefined;
   // A QR being generated is not proof of payment. Fonepay invoices start as
   // sent/pending and can become paid only after report reconciliation.
+  // A QR being generated is not proof of payment. *Dynamic* Fonepay invoices
+  // start as sent/pending until the gateway confirms the payment; static
+  // merchant-QR Fonepay invoices are settled at the counter and may be recorded
+  // as paid immediately (same trust model as cash).
   const invoiceStatus: Invoice["status"] =
     fonepay.paymentMethod === "Fonepay" &&
+      fonepay.fonepayQrType === "dynamic" &&
       (data.status === "paid" || data.status === "draft")
       ? "sent"
       : (data.status || "draft") as Invoice["status"];
@@ -1389,13 +1394,16 @@ export const updateInvoice = async (
     throw new Error("Voided invoices cannot be modified.");
   }
 
-  // Validate status transitions
+  // Validate status transitions. Only *dynamic* Fonepay QRs require gateway
+  // verification before the invoice can be marked paid. Static-merchant-QR
+  // Fonepay invoices are settled at the counter and may be marked paid directly.
   if (
     data.status === "paid" &&
-    existing.paymentMethod === "Fonepay"
+    existing.paymentMethod === "Fonepay" &&
+    existing.fonepayQrType === "dynamic"
   ) {
     throw new Error(
-      "Fonepay payments must be verified before marking the invoice paid.",
+      "Dynamic Fonepay payments must be verified before marking the invoice paid.",
     );
   }
 

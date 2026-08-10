@@ -1444,9 +1444,6 @@ adminRoutes.put(
         error: "Invoice is not configured for a dynamic Fonepay QR",
       }, 400);
     }
-    if (invoice.fonepayQrData) {
-      return c.json({ error: "Fonepay QR is already stored" }, 409);
-    }
     const db = (await import("../database/init.ts")).getDatabase();
     const payloadRows = db.query(
       "SELECT qr_message, amount, bill_id FROM fonepay_qr_payloads WHERE invoice_id = ?",
@@ -1462,8 +1459,11 @@ adminRoutes.put(
     ) {
       return c.json({ error: "QR payload does not match this invoice" }, 409);
     }
+    // Allow regenerating the stored QR image at any time (e.g. after the
+    // invoice amount changed); the payload check above keeps the QR bound
+    // to this invoice.
     db.query(
-      "UPDATE invoices SET fonepay_qr_data = ?, fonepay_qr_amount = ?, updated_at = ? WHERE id = ? AND fonepay_qr_data IS NULL",
+      "UPDATE invoices SET fonepay_qr_data = ?, fonepay_qr_amount = ?, updated_at = ? WHERE id = ?",
       [image, invoice.total, new Date(), id],
     );
     return c.json({ ok: true });

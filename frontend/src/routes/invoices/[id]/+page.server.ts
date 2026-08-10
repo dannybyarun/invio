@@ -77,12 +77,34 @@ export const actions: Actions = {
       if (intent === "mark-paid") {
         const paymentMethod =
           data.get("paymentMethod")?.toString().trim() || undefined;
-        if (paymentMethod === "Fonepay") {
-          await backendPost(
+        // Only *dynamic* Fonepay QRs require gateway verification before the
+        // invoice may be marked paid. Static-merchant-QR Fonepay invoices are
+        // settled at the counter and can be marked paid directly.
+        let isDynamicFonepay = false;
+        try {
+          const inv = (await backendGet(
+            `/api/v1/invoices/${id}`,
+            locals.authHeader,
+          )) as { paymentMethod?: string; fonepayQrType?: string } | undefined;
+          isDynamicFonepay =
+            inv?.paymentMethod === "Fonepay" &&
+            inv?.fonepayQrType === "dynamic";
+        } catch {
+          /* leave false; the backend guard is the source of truth */
+        }
+        if (isDynamicFonepay) {
+          const result = (await backendPost(
             `/api/v1/invoices/${id}/verify-payment`,
             locals.authHeader,
             {},
-          );
+          )) as { verified?: boolean; reason?: string };
+          if (!result?.verified) {
+            return fail(400, {
+              error:
+                result?.reason ||
+                "Fonepay payment not verified yet. Check the payment and try again.",
+            });
+          }
         } else {
           await backendPut(`/api/v1/invoices/${id}`, locals.authHeader, {
             status: "paid",

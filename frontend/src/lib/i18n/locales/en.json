@@ -47,6 +47,15 @@
   "Search products, SKU, or barcode": "Search products, SKU, or barcode",
   "Select a customer before completing the sale": "Select a customer before completing the sale",
   "Sale completed successfully": "Sale completed successfully",
+  "New sale": "New sale",
+  "Print receipt": "Print receipt",
+  "View invoice": "View invoice",
+  "Ready to scan": "Ready to scan",
+  "Invoice created; payment is pending": "Invoice created; payment is pending",
+  "Payment pending": "Payment pending",
+  "Scan to pay with Fonepay": "Scan to pay with Fonepay",
+  "Ask the customer to scan this QR, then check the invoice to verify payment.": "Ask the customer to scan this QR, then check the invoice to verify payment.",
+  "Open invoice to verify": "Open invoice to verify",
   "Add at least one product to the cart": "Add at least one product to the cart",
   "Your cart is empty": "Your cart is empty",
   "Branding": "Branding",
@@ -506,5 +515,11 @@
   "Create a new quote from this one": "Create a new quote from this one",
   "Failed to re-quote": "Failed to re-quote",
   "Barcode filled from scan — add the rest and save.": "Barcode filled from scan — add the rest and save.",
-  "Only administrators can assign user permissions.": "Only administrators can assign user permissions."
+  "Only administrators can assign user permissions.": "Only administrators can assign user permissions.",
+  "Regenerate payment QR": "Regenerate payment QR",
+  "Payment QR": "Payment QR",
+  "Close": "Close",
+  "Unable to generate Fonepay QR": "Unable to generate Fonepay QR",
+  "Fonepay payment QR code": "Fonepay payment QR code",
+  "Payment received": "Payment received"
 }

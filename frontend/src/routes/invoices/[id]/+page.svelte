@@ -63,9 +63,7 @@
   let generatingQr = $state(false);
   let paymentVerificationMessage = $state("");
   let qrImage = $derived(invoice?.fonepayQrType === "dynamic" ? invoice?.fonepayQrData : invoice?.fonepayQrType === "static" ? String(data.settings?.fonepayStaticQr || "/fonepay-static-qr.png") : "");
-  let canRetryQr = $derived(
-    Boolean(invoice && invoice.paymentMethod === "Fonepay" && invoice.fonepayQrType === "dynamic" && !invoice.fonepayQrData && invoice.status !== "paid" && invoice.status !== "complete" && canUpdate),
-  );
+  let canRetryQr = $derived(Boolean(invoice && invoice.paymentMethod === "Fonepay" && invoice.fonepayQrType === "dynamic" && invoice.status !== "paid" && invoice.status !== "complete" && canUpdate));
   let emailSending = $state(false);
   let emailDialog: HTMLDialogElement;
 
@@ -734,7 +732,7 @@
           <p class="mt-2 text-xs opacity-70">{invoice.fonepayQrType === "dynamic" ? t("Dynamic QR for this invoice total") : t("Static merchant QR")}</p>
           {#if canRetryQr}
             <button type="button" class="btn btn-sm btn-outline mt-3" disabled={generatingQr} onclick={generateInvoiceQr}>
-              {#if generatingQr}<span class="loading loading-spinner loading-xs"></span>{/if}{t("Generate payment QR")}
+              {#if generatingQr}<span class="loading loading-spinner loading-xs"></span>{/if}{invoice.fonepayQrData ? t("Regenerate payment QR") : t("Generate payment QR")}
             </button>
           {/if}
           {#if invoice.status !== "paid" && invoice.status !== "complete" && canUpdate}
